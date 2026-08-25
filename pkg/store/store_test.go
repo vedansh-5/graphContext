@@ -130,3 +130,177 @@ func TestSplitIdentifier(t *testing.T) {
 		}
 	}
 }
+
+func TestCommitAndRead(t *testing.T) {
+	s := newTestStore(t)
+
+	b := NewBatch()
+	b.TouchFile(FileRecord{Path: "svc.py", ContentHash: "h1", IndexedAt: time.Now()})
+	b.AddNode(fn("svc.py:login", "login", "svc.login", "svc.py"))
+	b.AddNode(fn("svc.py:auth", "auth", "svc.auth", "svc.py"))
+	b.AddEdge(Edge{
+		SourceID: "svc.py:login", TargetID: "svc.py:auth",
+		Kind: EdgeCalls, Line: 12, Confidence: ConfExact, CandidateCount: 1,
+	})
+	if err := s.Commit(b); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	n, err := s.Node("svc.py:login")
+	if err != nil || n == nil {
+		t.Fatalf("Node: %v (nil=%v)", err, n == nil)
+	}
+	if n.QualifiedName != "svc.login" || n.Kind != KindFunction {
+		t.Errorf("roundtrip mismatch: %+v", n)
+	}
+
+	out, err := s.OutEdges("svc.py:login")
+	if err != nil {
+		t.Fatalf("OutEdges: %v", err)
+	}
+	if len(out) != 1 || out[0].TargetID != "svc.py:auth" || out[0].Confidence != ConfExact {
+		t.Fatalf("OutEdges = %+v", out)
+	}
+
+	in, err := s.InEdges("svc.py:auth")
+	if err != nil {
+		t.Fatalf("InEdges: %v", err)
+	}
+	if len(in) != 1 || in[0].SourceID != "svc.py:login" {
+		t.Fatalf("InEdges = %+v", in)
+	}
+
+	missing, err := s.Node("nope")
+	if err != nil || missing != nil {
+		t.Errorf("missing node should be (nil,nil), got (%v,%v)", missing, err)
+	}
+}
+
+func TestTouchFileReplacesNodes(t *testing.T) {
+	s := newTestStore(t)
+
+	b := NewBatch()
+	b.TouchFile(FileRecord{Path: "a.py", ContentHash: "h1", IndexedAt: time.Now()})
+	b.AddNode(fn("a.py:old", "old", "a.old", "a.py"))
+	if err := s.Commit(b); err != nil {
+		t.Fatalf("first commit: %v", err)
+	}
+
+	// Re-index the same file with different contents.
+	b2 := NewBatch()
+	b2.TouchFile(FileRecord{Path: "a.py", ContentHash: "h2", IndexedAt: time.Now()})
+	b2.AddNode(fn("a.py:new", "new", "a.new", "a.py"))
+	if err := s.Commit(b2); err != nil {
+		t.Fatalf("second commit: %v", err)
+	}
+
+	nodes, err := s.NodesInFile("a.py")
+	if err != nil {
+		t.Fatalf("NodesInFile: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].ID != "a.py:new" {
+		t.Fatalf("re-index should replace, got %+v", nodes)
+	}
+
+	hashes, err := s.FileHashes()
+	if err != nil {
+		t.Fatalf("FileHashes: %v", err)
+	}
+	if hashes["a.py"] != "h2" {
+		t.Errorf("hash = %q, want h2", hashes["a.py"])
+	}
+}
+
+func TestRemoveFileCascadesEdges(t *testing.T) {
+	s := newTestStore(t)
+
+	b := NewBatch()
+	b.TouchFile(FileRecord{Path: "a.py", ContentHash: "h", IndexedAt: time.Now()})
+	b.TouchFile(FileRecord{Path: "b.py", ContentHash: "h", IndexedAt: time.Now()})
+	b.AddNode(fn("a.py:caller", "caller", "a.caller", "a.py"))
+	b.AddNode(fn("b.py:callee", "callee", "b.callee", "b.py"))
+	b.AddEdge(Edge{SourceID: "a.py:caller", TargetID: "b.py:callee",
+		Kind: EdgeCalls, Line: 1, Confidence: ConfExact})
+	if err := s.Commit(b); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	del := NewBatch()
+	del.RemoveFile("b.py")
+	if err := s.Commit(del); err != nil {
+		t.Fatalf("remove commit: %v", err)
+	}
+
+	edges, err := s.AllEdges()
+	if err != nil {
+		t.Fatalf("AllEdges: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("edge should cascade away, got %+v", edges)
+	}
+	hashes, _ := s.FileHashes()
+	if _, ok := hashes["b.py"]; ok {
+		t.Error("file record should be gone")
+	}
+}
+
+func TestConfidenceCounts(t *testing.T) {
+	s := newTestStore(t)
+
+	b := NewBatch()
+	b.TouchFile(FileRecord{Path: "a.py", ContentHash: "h", IndexedAt: time.Now()})
+	for _, id := range []string{"a", "b", "c"} {
+		b.AddNode(fn("a.py:"+id, id, "a."+id, "a.py"))
+	}
+	b.AddEdge(Edge{SourceID: "a.py:a", TargetID: "a.py:b", Kind: EdgeCalls,
+		Line: 1, Confidence: ConfExact})
+	b.AddEdge(Edge{SourceID: "a.py:a", TargetID: "a.py:c", Kind: EdgeCalls,
+		Line: 2, Confidence: ConfAmbiguous, CandidateCount: 2})
+	if err := s.Commit(b); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	counts, err := s.ConfidenceCounts()
+	if err != nil {
+		t.Fatalf("ConfidenceCounts: %v", err)
+	}
+	if counts[ConfExact] != 1 || counts[ConfAmbiguous] != 1 {
+		t.Errorf("counts = %+v", counts)
+	}
+}
+
+func TestOrderingIsDeterministic(t *testing.T) {
+	s := newTestStore(t)
+
+	b := NewBatch()
+	b.TouchFile(FileRecord{Path: "a.py", ContentHash: "h", IndexedAt: time.Now()})
+	for _, id := range []string{"z", "m", "a"} {
+		b.AddNode(fn("a.py:"+id, id, "a."+id, "a.py"))
+	}
+	if err := s.Commit(b); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	var first []string
+	for i := 0; i < 5; i++ {
+		nodes, err := s.AllNodes()
+		if err != nil {
+			t.Fatalf("AllNodes: %v", err)
+		}
+		var ids []string
+		for _, n := range nodes {
+			ids = append(ids, n.ID)
+		}
+		if i == 0 {
+			first = ids
+			continue
+		}
+		if !reflect.DeepEqual(ids, first) {
+			t.Fatalf("ordering not deterministic: %v vs %v", ids, first)
+		}
+	}
+	want := []string{"a.py:a", "a.py:m", "a.py:z"}
+	if !reflect.DeepEqual(first, want) {
+		t.Errorf("AllNodes order = %v, want %v", first, want)
+	}
+}
