@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -107,3 +108,25 @@ func TestSchemaVersionMismatchRebuilds(t *testing.T) {
 // Compile-time proof the shared types exist with the expected field names.
 var _ = FileRecord{Path: "a", ContentHash: "b", IndexedAt: time.Now()}
 var _ = Edge{SourceID: "a", TargetID: "b", Kind: EdgeCalls, Confidence: ConfExact}
+
+func TestSplitIdentifier(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"checkRateLimit", []string{"check", "rate", "limit"}},
+		{"check_rate_limit", []string{"check", "rate", "limit"}},
+		{"CheckRateLimit", []string{"check", "rate", "limit"}},
+		{"parseHTTPResponse", []string{"parse", "http", "response"}},
+		{"AuthService.authenticate_user", []string{"auth", "service", "authenticate", "user"}},
+		{"HTTPServer", []string{"http", "server"}},
+		{"main", []string{"main"}},
+		{"", nil},
+	}
+	for _, c := range cases {
+		got := SplitIdentifier(c.in)
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("SplitIdentifier(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
