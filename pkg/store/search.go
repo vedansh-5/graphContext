@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"strings"
 	"unicode"
 )
@@ -78,4 +79,46 @@ func ftsTokens(n Node) string {
 		add(t)
 	}
 	return strings.Join(parts, " ")
+}
+
+// SearchHit is one full-text search result.
+type SearchHit struct {
+	NodeID string
+	Rank   float64
+}
+
+// Search runs an FTS5 MATCH over symbol tokens and docstrings.
+// Query terms are treated as literals, so caller input never breaks FTS syntax.
+func (s *Store) Search(query string, limit int) ([]SearchHit, error) {
+	terms := SplitIdentifier(query)
+	if len(terms) == 0 {
+		return nil, nil
+	}
+	// Quote each term so FTS5 operators in user input are inert.
+	quoted := make([]string, len(terms))
+	for i, t := range terms {
+		quoted[i] = `"` + t + `"`
+	}
+	match := strings.Join(quoted, " ")
+
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.conn.Query(
+		`SELECT node_id, rank FROM symbols_fts WHERE symbols_fts MATCH ?
+		 ORDER BY rank LIMIT ?`, match, limit)
+	if err != nil {
+		return nil, fmt.Errorf("fts search %q: %w", query, err)
+	}
+	defer rows.Close()
+
+	var hits []SearchHit
+	for rows.Next() {
+		var h SearchHit
+		if err := rows.Scan(&h.NodeID, &h.Rank); err != nil {
+			return nil, fmt.Errorf("scan search hit: %w", err)
+		}
+		hits = append(hits, h)
+	}
+	return hits, rows.Err()
 }

@@ -304,3 +304,57 @@ func TestOrderingIsDeterministic(t *testing.T) {
 		t.Errorf("AllNodes order = %v, want %v", first, want)
 	}
 }
+
+func TestSearchMatchesSubwords(t *testing.T) {
+	s := newTestStore(t)
+
+	b := NewBatch()
+	b.TouchFile(FileRecord{Path: "l.go", ContentHash: "h", IndexedAt: time.Now()})
+	n := fn("l.go:checkRateLimit", "checkRateLimit", "limiter.checkRateLimit", "l.go")
+	n.Docstring = "Rejects requests over quota."
+	b.AddNode(n)
+	b.AddNode(fn("l.go:unrelated", "unrelated", "limiter.unrelated", "l.go"))
+	if err := s.Commit(b); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	for _, q := range []string{"rate limit", "checkRateLimit", "check_rate_limit", "rate"} {
+		hits, err := s.Search(q, 10)
+		if err != nil {
+			t.Fatalf("Search(%q): %v", q, err)
+		}
+		if len(hits) == 0 || hits[0].NodeID != "l.go:checkRateLimit" {
+			t.Errorf("Search(%q) = %+v, want checkRateLimit first", q, hits)
+		}
+	}
+
+	// FTS operators in user input must not break the query.
+	if _, err := s.Search(`bad" OR "x`, 10); err != nil {
+		t.Errorf("hostile query should not error: %v", err)
+	}
+}
+
+func TestSearchDropsPurgedNodes(t *testing.T) {
+	s := newTestStore(t)
+
+	b := NewBatch()
+	b.TouchFile(FileRecord{Path: "a.go", ContentHash: "h", IndexedAt: time.Now()})
+	b.AddNode(fn("a.go:findWidget", "findWidget", "a.findWidget", "a.go"))
+	if err := s.Commit(b); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	del := NewBatch()
+	del.RemoveFile("a.go")
+	if err := s.Commit(del); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+
+	hits, err := s.Search("find widget", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Errorf("purged node still searchable: %+v", hits)
+	}
+}
