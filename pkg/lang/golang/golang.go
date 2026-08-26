@@ -72,7 +72,7 @@ func (p Plugin) Parse(path string, src []byte) (*lang.FileIR, error) {
 	// References second: they need the declaration set to attribute FromID.
 	p.refs(tree.RootNode(), src, path, ir)
 
-	sortIR(ir)
+	lang.SortIR(ir)
 	return ir, nil
 }
 
@@ -182,7 +182,7 @@ func (p Plugin) methodDecl(n *sitter.Node, src []byte, path string, isTestFile b
 	qname := name
 	if recvType != "" {
 		qname = recvType + "." + name
-		ir.Types.Methods[recvType] = insertSorted(ir.Types.Methods[recvType], name)
+		ir.Types.Methods[recvType] = lang.InsertSorted(ir.Types.Methods[recvType], name)
 	}
 
 	nd := node(path, name, qname, store.KindMethod, "go", n, src)
@@ -288,7 +288,7 @@ func literalType(v *sitter.Node, src []byte) string {
 
 // refs records every call site, attributed to its enclosing declaration.
 func (Plugin) refs(root *sitter.Node, src []byte, path string, ir *lang.FileIR) {
-	byRange := declIndex(ir)
+	byRange := lang.DeclIndex(ir)
 	lang.Walk(root, func(n *sitter.Node) {
 		if n.Type() != "call_expression" {
 			return
@@ -321,43 +321,13 @@ func (Plugin) refs(root *sitter.Node, src []byte, path string, ir *lang.FileIR) 
 	})
 }
 
-// declIndex returns a lookup from a node position to the enclosing declaration
-// ID, using the byte ranges already recorded on the IR's nodes.
-func declIndex(ir *lang.FileIR) func(*sitter.Node) string {
-	type span struct {
-		start, end int
-		id         string
-	}
-	var spans []span
-	for _, n := range ir.Nodes {
-		if n.Kind == store.KindFunction || n.Kind == store.KindMethod {
-			spans = append(spans, span{n.StartByte, n.EndByte, n.ID})
-		}
-	}
-	return func(n *sitter.Node) string {
-		pos := int(n.StartByte())
-		best, bestLen := "", 1<<62
-		for _, s := range spans {
-			if pos >= s.start && pos < s.end && s.end-s.start < bestLen {
-				best, bestLen = s.id, s.end-s.start
-			}
-		}
-		return best
-	}
-}
-
 func node(path, name, qname string, kind store.NodeKind, language string, n *sitter.Node, src []byte) store.Node {
-	vis := store.VisPrivate
+	nd := lang.MakeNode(path, name, qname, kind, language, n)
+	nd.Visibility = store.VisPrivate
 	if lang.ExportedByCase(name) {
-		vis = store.VisExported
+		nd.Visibility = store.VisExported
 	}
-	return store.Node{
-		ID: path + ":" + qname, Kind: kind, Name: name, QualifiedName: qname,
-		FilePath: path, Language: language,
-		StartLine: lang.Line(n), EndLine: lang.EndLine(n),
-		StartByte: int(n.StartByte()), EndByte: int(n.EndByte()),
-		Visibility: vis, EntrypointKind: store.EntryNone,
-	}
+	return nd
 }
 
 // signature is the declaration's first line, which is enough for an agent to
@@ -378,45 +348,4 @@ func isTestFunc(name string) bool {
 		}
 	}
 	return false
-}
-
-func insertSorted(xs []string, v string) []string {
-	for _, x := range xs {
-		if x == v {
-			return xs
-		}
-	}
-	xs = append(xs, v)
-	sort.Strings(xs)
-	return xs
-}
-
-// sortIR enforces deterministic ordering. Tree traversal is already in source
-// order, but sorting makes the guarantee explicit and survives refactors.
-func sortIR(ir *lang.FileIR) {
-	sort.SliceStable(ir.Nodes, func(i, j int) bool {
-		if ir.Nodes[i].StartByte != ir.Nodes[j].StartByte {
-			return ir.Nodes[i].StartByte < ir.Nodes[j].StartByte
-		}
-		return ir.Nodes[i].ID < ir.Nodes[j].ID
-	})
-	sort.SliceStable(ir.Refs, func(i, j int) bool {
-		a, b := ir.Refs[i], ir.Refs[j]
-		if a.Line != b.Line {
-			return a.Line < b.Line
-		}
-		if a.FromID != b.FromID {
-			return a.FromID < b.FromID
-		}
-		if a.Receiver != b.Receiver {
-			return a.Receiver < b.Receiver
-		}
-		return a.Name < b.Name
-	})
-	sort.SliceStable(ir.Imports, func(i, j int) bool {
-		if ir.Imports[i].Line != ir.Imports[j].Line {
-			return ir.Imports[i].Line < ir.Imports[j].Line
-		}
-		return ir.Imports[i].Path < ir.Imports[j].Path
-	})
 }
