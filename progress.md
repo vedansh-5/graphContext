@@ -57,6 +57,7 @@
   - `Condense`: module-level quotient graph with coupling weights and Mermaid diagram generation.
 
 ### M1 (Part 2) — MCP Server & Core Reasoning Tools
+- PR: [#6](https://github.com/vedansh-5/graphContext/pull/6)
 - Branch: `feat/mcp-tools`
 - Package: `pkg/mcp_server`
 - Deliverables:
