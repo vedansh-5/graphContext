@@ -56,29 +56,36 @@
   - `DeadCandidates`: multi-source BFS from root entrypoints (`main`, routes, tests) for unreachable code detection.
   - `Condense`: module-level quotient graph with coupling weights and Mermaid diagram generation.
 
+### M1 (Part 2) — MCP Server & Core Reasoning Tools
+- PR: [#6](https://github.com/vedansh-5/graphContext/pull/6)
+- Branch: `feat/mcp-tools`
+- Package: `pkg/mcp_server`
+- Deliverables:
+  - Uniform JSON-RPC response envelope (`Envelope`: `answer`, `caveats`, `stats`, `graph_meta`).
+  - Stdio MCP server with per-project session cache (`store.Store` + `indexer.EnsureFresh` + in-memory `analysis.Graph`).
+  - 6 Core Reasoning Tools:
+    1. `search_symbols(query, kind?, limit)`: FTS5 matching with in-memory fallback.
+    2. `get_context(symbol, radius?, include_source?)`: Symbol-centered context pack with 1-hop callers, callees, inheritance, and optional source snippet.
+    3. `get_task_context(task, limit?)`: Context engine scoring task prompt tokens, expanding bounded neighborhoods, and returning ranked context packs.
+    4. `impact_of_change(symbol, change_type?, max_depth?, limit?)`: Reverse reachability impact set, affected test files, entrypoints, and dangling references on delete.
+    5. `trace(from, to?, direction?, max_depth?, limit?)`: Call-tree execution trace (with recursion detection) or call paths between two symbols.
+    6. `repo_overview(analysis?, level?, top?)`: Architecture map with Mermaid diagram, SCC circular dependencies, dead code candidates, and module coupling metrics.
+  - Comprehensive end-to-end test suite in `pkg/mcp_server/server_test.go`.
+
 ---
 
 ## Active Milestone
 
-### M1 (Part 2) — MCP Server & Core Reasoning Tools
-- Branch: `feat/mcp-tools`
-- Package: `pkg/mcp_server`
+### M2 — Change Intelligence
 - Goals:
-  - Uniform JSON-RPC response envelope (`answer`, `provenance`, `confidence`, `stats`, `graph_meta`).
-  - Stdio MCP server with session management.
-  - 6 Core Reasoning Tools:
-    1. `search_symbols(query, kind?, limit)`: FTS5 entrypoint.
-    2. `get_context(symbol, radius, include_source?)`: Symbol-centered context pack.
-    3. `get_task_context(task, limit)`: Context Engine (task string -> ranked, bounded context pack).
-    4. `impact_of_change(symbol | diff, change_type, max_depth)`: Reverse reachability impact set + affected tests.
-    5. `trace(from, to?, direction, max_depth, level)`: Call-tree execution trace + paths between.
-    6. `repo_overview(analysis, level)`: Architecture map, cycles, dead code candidates, coupling metrics.
+  - Diff-aware impact analysis (`git diff` parsing to identify modified AST symbols).
+  - Smart test selection based on reverse reachability from changed symbols.
+  - Architectural boundary rules and linter.
 
 ---
 
 ## Roadmap
 
-- **M2 — Change Intelligence**: Diff-aware impact analysis, test selection, architecture rules.
 - **M3 — Daemon**: Debounced file watcher, hot graph, idle eviction.
 - **M4 — Validation & Benchmarks**: Token-cost and resolver accuracy benchmarks.
 - **M5 — Research Artifact**: Mutation-derived agent evaluation.
