@@ -91,6 +91,7 @@
   - Unit test suite in `pkg/diff/diff_test.go` covering multi-hunk diffs, created/deleted files, git execution, and symbol mapping.
 
 #### M2.2 — Predictive Test Selection Engine
+- PR: [#8](https://github.com/vedansh-5/graphContext/pull/8)
 - Branch: `feat/m2-test-selection`
 - Package: `pkg/testselect`
 - Deliverables:
