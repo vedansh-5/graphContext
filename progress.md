@@ -81,6 +81,7 @@
 ### M2 — Change Intelligence
 
 #### M2.1 — Unified Git Diff Parser & AST Symbol Mapping
+- PR: [#7](https://github.com/vedansh-5/graphContext/pull/7)
 - Branch: `feat/m2-diff-parser`
 - Package: `pkg/diff`
 - Deliverables:
