@@ -124,10 +124,16 @@
 ## Active Milestone
 
 ### M3 — Daemon & Live Watcher
-- Goals:
-  - Background file watcher with debounce queue (`fsnotify`).
-  - Hot in-memory graph with incremental SQLite sync.
-  - Idle resource eviction and memory profiling.
+
+#### M3.1 — File Watcher & Debounce Event Queue
+- PR: [#11](https://github.com/vedansh-5/graphContext/pull/11)
+- Branch: `feat/m3-file-watcher`
+- Package: `pkg/watcher`
+- Deliverables:
+  - Recursive directory watcher leveraging `fsnotify` with dynamic directory discovery.
+  - Sliding-window debouncer with operation coalescing (`OpCreate`, `OpModify`, `OpDelete`) and deterministic path sorting.
+  - Extensible path filtering skipping VCS directories, virtual environments, build artifacts, and non-code files.
+  - Comprehensive unit test suite covering event coalescing, live file CRUD, dynamic subdirectories, and exclusion rules.
 
 ---
 
