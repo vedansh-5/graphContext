@@ -112,15 +112,28 @@
   - Deterministic violation sorting by file, line number, and node IDs.
   - Comprehensive unit test suite in `pkg/archlint/archlint_test.go`.
 
-#### M2.4 — MCP Change Intelligence Integration (Upcoming)
+#### M2.4 — MCP Change Intelligence Integration
+- PR: [#10](https://github.com/vedansh-5/graphContext/pull/10)
+- Branch: `feat/m2-mcp-integration`
 - Package: `pkg/mcp_server`
+- Deliverables:
+  - `diff_impact` tool accepting raw diffs, git revisions, or uncommitted/staged working tree changes.
+  - End-to-end Change Intelligence combining diff-to-AST mapping, predictive test selection, and architectural boundary linting.
+  - Comprehensive integration test in `pkg/mcp_server/server_test.go`.
+
+---
+
+## Active Milestone
+
+### M3 — Daemon & Live Watcher
 - Goals:
-  - Expose `diff_impact` and git-aware change intelligence to AI agents over MCP stdio.
+  - Background file watcher with debounce queue (`fsnotify`).
+  - Hot in-memory graph with incremental SQLite sync.
+  - Idle resource eviction and memory profiling.
 
 ---
 
 ## Roadmap
 
-- **M3 — Daemon**: Debounced file watcher, hot graph, idle eviction.
 - **M4 — Validation & Benchmarks**: Token-cost and resolver accuracy benchmarks.
 - **M5 — Research Artifact**: Mutation-derived agent evaluation.

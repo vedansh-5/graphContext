@@ -14,7 +14,7 @@ type ChangedSymbol struct {
 }
 
 func MapDiffToSymbols(diffs []FileDiff, s *store.Store) ([]ChangedSymbol, error) {
-	var results []ChangedSymbol
+	results := make([]ChangedSymbol, 0)
 	seen := make(map[string]bool)
 
 	for _, fd := range diffs {

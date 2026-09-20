@@ -87,7 +87,7 @@ func SelectTests(changed []diff.ChangedSymbol, g *analysis.Graph, maxDepth int) 
 		}
 	}
 
-	var matches []TestMatch
+	matches := make([]TestMatch, 0)
 	testFilesMap := make(map[string]bool)
 
 	for _, m := range bestMatches {
@@ -107,7 +107,7 @@ func SelectTests(changed []diff.ChangedSymbol, g *analysis.Graph, maxDepth int) 
 		return matches[i].TestNode.ID < matches[j].TestNode.ID
 	})
 
-	var testFiles []string
+	testFiles := make([]string, 0)
 	for f := range testFilesMap {
 		testFiles = append(testFiles, f)
 	}

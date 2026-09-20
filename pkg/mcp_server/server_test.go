@@ -220,4 +220,44 @@ func TestMCPToolsEndToEnd(t *testing.T) {
 			t.Errorf("expected dead_code in repo_overview")
 		}
 	})
+
+	t.Run("diff_impact", func(t *testing.T) {
+		diffText := `diff --git a/auth/service.py b/auth/service.py
+index 1234567..89abcdef 100644
+--- a/auth/service.py
++++ b/auth/service.py
+@@ -2,3 +2,4 @@ class AuthService:
+     def login(self, username, password):
++        print("debug")
+         self.validate(username)
+`
+		res, err := handleDiffImpact(sess, projDir, map[string]any{
+			"diff": diffText,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.IsError {
+			t.Fatalf("diff_impact error: %v", res)
+		}
+
+		text := extractResultText(res)
+		env := parseResultEnvelope(t, text)
+		ans := env.Answer.(map[string]any)
+
+		changed := ans["changed_symbols"].([]any)
+		if len(changed) == 0 {
+			t.Errorf("expected changed symbols in diff_impact, got 0")
+		}
+
+		tests := ans["affected_tests"].([]any)
+		if len(tests) == 0 {
+			t.Errorf("expected affected tests in diff_impact, got 0")
+		}
+
+		files := ans["test_files"].([]any)
+		if len(files) == 0 {
+			t.Errorf("expected test files in diff_impact, got 0")
+		}
+	})
 }
