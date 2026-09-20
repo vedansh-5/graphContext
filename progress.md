@@ -136,6 +136,7 @@
   - Comprehensive unit test suite covering event coalescing, live file CRUD, dynamic subdirectories, and exclusion rules.
 
 #### M3.2 — Live In-Memory Graph Incremental Updater
+- PR: [#12](https://github.com/vedansh-5/graphContext/pull/12)
 - Branch: `feat/m3-daemon`
 - Package: `pkg/daemon`
 - Deliverables:
