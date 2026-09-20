@@ -18,6 +18,7 @@ func StartStdioServer() error {
 	registerTaskContextTool(s)
 	registerReasoningTools(s)
 	registerRepoOverviewTool(s)
+	registerDiffImpactTool(s)
 
 	fmt.Fprintf(os.Stderr, "Starting graphContext MCP server on stdio...\n")
 	return server.ServeStdio(s)
