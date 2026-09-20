@@ -76,8 +76,6 @@
 
 ---
 
-## Active Milestone
-
 ### M2 — Change Intelligence
 
 #### M2.1 — Unified Git Diff Parser & AST Symbol Mapping
