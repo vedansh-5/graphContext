@@ -101,11 +101,15 @@
   - Git diff integration (`SelectTestsFromDiff`) combining diff parsing, AST mapping, and test selection into one pipeline.
   - Comprehensive unit test suite in `pkg/testselect/testselect_test.go`.
 
-#### M2.3 — Architectural Boundary Linter (Upcoming)
+#### M2.3 — Architectural Boundary Linter
+- Branch: `feat/m2-arch-linter`
 - Package: `pkg/archlint`
-- Goals:
-  - Declarative layer boundary and forbidden dependency rules.
-  - Edge diff validation flagging architectural violations before commit.
+- Deliverables:
+  - Declarative architectural rule definitions (`RuleSet`, `ForbiddenRule`, `LayerRule`) with JSON configuration loading.
+  - Whole-graph architectural linter (`LintGraph`) enforcing forbidden path patterns and strict layered architecture hierarchies.
+  - Diff-scoped architectural linter (`LintDiff`) verifying only edges modified or introduced in the diff.
+  - Deterministic violation sorting by file, line number, and node IDs.
+  - Comprehensive unit test suite in `pkg/archlint/archlint_test.go`.
 
 #### M2.4 — MCP Change Intelligence Integration (Upcoming)
 - Package: `pkg/mcp_server`
