@@ -113,6 +113,7 @@
   - Comprehensive unit test suite in `pkg/archlint/archlint_test.go`.
 
 #### M2.4 — MCP Change Intelligence Integration
+- PR: [#10](https://github.com/vedansh-5/graphContext/pull/10)
 - Branch: `feat/m2-mcp-integration`
 - Package: `pkg/mcp_server`
 - Deliverables:
