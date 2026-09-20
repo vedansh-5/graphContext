@@ -39,3 +39,22 @@ func Load(s *store.Store) (*Graph, error) {
 	}
 	return NewGraph(nodes, edges), nil
 }
+
+func (g *Graph) NodeCount() int {
+	if g == nil {
+		return 0
+	}
+	return len(g.Nodes)
+}
+
+func (g *Graph) EdgeCount() int {
+	if g == nil {
+		return 0
+	}
+	count := 0
+	for _, edges := range g.Out {
+		count += len(edges)
+	}
+	return count
+}
+
