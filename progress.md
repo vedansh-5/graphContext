@@ -102,6 +102,7 @@
   - Comprehensive unit test suite in `pkg/testselect/testselect_test.go`.
 
 #### M2.3 — Architectural Boundary Linter
+- PR: [#9](https://github.com/vedansh-5/graphContext/pull/9)
 - Branch: `feat/m2-arch-linter`
 - Package: `pkg/archlint`
 - Deliverables:
