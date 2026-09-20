@@ -1,105 +1,146 @@
-# CodeGraphContext MCP Server
+# graphContext — Graph Reasoning Engine for AI Software Engineers
 
-CodeGraphContext is a high-performance, local Model Context Protocol (MCP) server written in Go. It dynamically crawls, parses, and indexes Python codebases into a queryable relational graph inside SQLite, exposing tools for AI agents to inspect call hierarchies and function dependencies in real-time.
+`graphContext` is a high-performance, local Model Context Protocol (MCP) server written in Go. It dynamically indexes multi-language codebases (**Go**, **Python**, and **TypeScript/JavaScript**) into a queryable relational graph and in-memory analysis engine, exposing deterministic graph reasoning tools for AI coding agents (Claude, GPT, Gemini, local models).
 
 ---
 
-## 1. System Architecture & Design
+## 1. System Architecture & Philosophy
 
-The application is structured around a concurrent **Producer-Consumer pipeline** that maps files to AST structures and outputs them to SQLite.
+AI agents waste context window capacity rediscovering code structure that can be statically known. `graphContext` inverts this division of labor:
+* **The Graph Computes**: Deterministic algorithms calculate blast radii, call trees, dependency paths, circular dependencies, dead code, and module architecture maps.
+* **The LLM Explains**: The agent receives compact, structured JSON carrying exact file and line provenance.
 
 ```mermaid
 graph TD
-    A[Crawler: WalkDir] -->|File Paths| B(Buffered Channel: 100 slots)
-    B -->|Path| C1[Worker Goroutine 1]
-    B -->|Path| C2[Worker Goroutine 2]
-    B -->|Path| C3[Worker Goroutine 3]
-    B -->|Path| C4[Worker Goroutine 4]
-    
-    C1 -->|Parse AST| D[Tree-sitter Python]
-    C2 -->|Parse AST| D
-    C3 -->|Parse AST| D
-    C4 -->|Parse AST| D
-    
-    D -->|Nodes & Edges| E(Write Channel Queue: 1000 slots)
-    E -->|Serialized SQL Operations| F[Single-Threaded SQLite Writer]
-    F -->|WAL Write| G[(SQLite: graph.db)]
-```
-
-### Relational Schema (SQLite)
-The call graph is stored using a simple, index-optimized relational schema:
-
-```sql
--- Represents code entities (functions, classes, files)
-CREATE TABLE IF NOT EXISTS nodes (
-    id TEXT PRIMARY KEY,       -- Format: filepath:functionName or abstract:functionName
-    type TEXT NOT NULL,        -- 'function', 'class', 'file'
-    name TEXT NOT NULL,        -- Pure name (e.g. 'scatter')
-    file_path TEXT NOT NULL,   -- Absolute OS file path
-    start_byte INTEGER,        -- Exact AST byte offset start
-    end_byte INTEGER           -- Exact AST byte offset end
-);
-
--- Represents directed relationships (e.g., caller calls callee)
-CREATE TABLE IF NOT EXISTS edges (
-    source_id TEXT NOT NULL,   -- Caller function ID
-    target_id TEXT NOT NULL,   -- Callee function ID
-    type TEXT NOT NULL,        -- Relationship type (e.g., 'calls')
-    PRIMARY KEY (source_id, target_id, type),
-    FOREIGN KEY (source_id) REFERENCES nodes(id) ON DELETE CASCADE,
-    FOREIGN KEY (target_id) REFERENCES nodes(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_nodes_file_path ON nodes(file_path);
-CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
+    A[Codebase Files: Go / Python / TypeScript] -->|Crawled by extension| B[Pass 1: AST Extraction]
+    B -->|Language Plugins: Tree-sitter| C[FileIR: Nodes, Imports, Unresolved Refs]
+    C -->|Global Indexing| D[Pass 2: Reference Resolver]
+    D -->|Receiver Types, Interfaces, Scopes| E[Resolved Nodes & Typed Edges]
+    E -->|SHA-256 Hashing & Change Detection| F[Pass 3: Incremental Indexer]
+    F -->|Batch Writes / WAL| G[(SQLite Schema v3: ~/.cache/graphcontext/...)]
+    G -->|Hydrate on Change| H[In-Memory Graph: Dual Adjacency Lists]
+    H -->|Pure Algorithms| I[Analysis Engine: BFS, Tarjan SCC, Quotient]
+    I -->|Uniform JSON Envelopes| J[MCP Server: Stdio JSON-RPC]
+    J -->|6 Reasoning Tools| K[AI Agents / IDEs]
 ```
 
 ---
 
-## 2. Key Design Decisions
+## 2. Core Architectural Layers
 
-### Go Concurrency Model (Channels over Mutexes)
-* **Design Decision:** We use Go's native channels (`chan`) to pipeline file paths from the directory walker (producer) to a pool of 4 concurrent worker goroutines (consumers).
-* **Rationale:** Spawning a goroutine per file creates too much thread scheduling overhead on large codebases. A fixed-size worker pool (4 threads) matches the CPU cores of modern local machines, preventing thread thrashing while maximizing CPU utilization.
+### Pass 1: Multi-Language AST Parsing (`pkg/lang`)
+* Language-neutral intermediate representation (`FileIR`, `ImportRef`, `Ref`, `TypeFacts`).
+* Extracted via Tree-sitter for:
+  * **Go** (`pkg/lang/golang`): Functions, methods, receiver types, struct fields, interface method sets, imports, and calls.
+  * **Python** (`pkg/lang/python`): Functions, classes, methods, decorators, inheritance, type annotations, and constructors.
+  * **TypeScript/JavaScript** (`pkg/lang/typescript`): Functions, classes, interfaces, type aliases, class fields, imports/re-exports, and `new` instantiations.
 
-### Single-Threaded SQLite Writer Queue
-* **Design Decision:** All database write queries (`UpsertNode` and `UpsertEdge`) are marshaled into parameterless function closures (`func()`) and routed through a single channel queue (`writeChan`) consumed by a single background writer thread.
-* **Rationale:** SQLite is fundamentally a single-writer database. Parallel writes from multiple worker threads create write-lock collisions, returning `SQLITE_BUSY` (database is locked) and causing silent data loss. Spawning a single dedicated writer thread guarantees sequential, collision-free writes.
+### Pass 2: Cross-File Reference Resolver (`pkg/resolver`)
+* Multi-file symbol and module table mapping imports to concrete file and module nodes.
+* Receiver type propagation resolves method calls on `self`, `this`, `super`, local variables, and selector chains (e.g. `r.db.Query()`).
+* Structural interface satisfaction matching method sets (Go and TypeScript duck typing).
+* Explicit edge confidence tiers: `exact`, `ambiguous`, `name_match`, or `unknown`.
 
-### AST Queries + Parent AST Traversal
-* **Design Decision:** Instead of matching complex parent-child scopes inside the Tree-sitter query itself (which is highly fragile and fails on nested conditional blocks, loops, or exception statements), we:
-  1. Use simple queries to find all call nodes.
-  2. Walk up the AST parent pointers (`node.Parent()`) in Go until we hit a `function_definition` node, extracting the containing function's name programmatically.
-* **Rationale:** Programmatic parent-walking is 100% reliable and guarantees we find the caller function regardless of how deeply nested the call is inside the function body.
+### Pass 3: Incremental Hash Indexer (`pkg/indexer`)
+* `EnsureFresh` coordinator computes SHA-256 content hashes of files against indexed states in SQLite.
+* Unchanged files are bypassed completely.
+* Modified files are re-parsed and atomically updated inside SQLite transactions.
+* Deleted files trigger automatic cascading deletions of owned nodes and edges.
+
+### Storage Engine: Schema v3 & FTS5 (`pkg/store`)
+* Database files are stored externally in `~/.cache/graphcontext/<hash>/graph.db` to avoid repository clutter.
+* SQLite schema v3 includes `nodes`, `edges`, `files`, and `metadata` tables with foreign key constraints and WAL mode.
+* Write-time subword tokenization (`SplitIdentifier`) indexes camelCase, snake_case, and dotted symbols in FTS5 for fast fuzzy lookups.
+
+### In-Memory Analysis Engine (`pkg/analysis`)
+* Bidirectional in-memory graph (`In` and `Out` adjacency lists) loaded from SQLite on startup.
+* Algorithms execute in memory rather than recursive SQL CTEs:
+  * `ReverseReach`: Layered BFS over incoming edges for impact sets and blast radius.
+  * `ForwardReach`: Layered BFS over outgoing edges for dependency analysis.
+  * `Trace`: Forward execution call-tree with cycle detection and depth/breadth budgets.
+  * `Neighborhood`: Subgraph extraction around seed nodes.
+  * `PathsBetween`: Multi-hop call path enumeration with line numbers.
+  * `SCCs`: Tarjan's Strongly Connected Components algorithm for circular dependency detection.
+  * `DeadCandidates`: Multi-source BFS from roots (`main`, tests, routes) to find unreachable code.
+  * `Condense`: Module-level quotient graph computing coupling weights and generating Mermaid architecture diagrams.
 
 ---
 
-## 3. Encountered Issues & Resolutions
+## 3. The 6 MCP Reasoning Tools
 
-### Case Study 1: Stdio Pollution & JSON-RPC Corruption
-* **Symptoms:** The IDE returned `invalid character 'S' looking for beginning of value` and crashed during initialization.
-* **Root Cause:** In `main.go`, we logged progress logs using standard `fmt.Printf("Starting scan of...")` which writes to `os.Stdout`. Because the MCP protocol uses `os.Stdout` exclusively for JSON-RPC communication, these raw prints corrupted the communication stream, crashing the IDE's client parser.
-* **Resolution:** Replaced all print statements in the crawler and parser with `fmt.Fprintf(os.Stderr, ...)` or standard Go `log.Printf`. Standard error is safely captured by the IDE's log consoles without touching the JSON-RPC stream.
+Every tool returns a uniform response envelope:
+```json
+{
+  "answer": { "...structured facts..." },
+  "caveats": ["...honest confidence disclosures..."],
+  "stats": { "nodes_evaluated": 120, "truncated": false }
+}
+```
 
-### Case Study 2: Root Directory Permission Crashes
-* **Symptoms:** The server crashed on startup with `unable to open database file (14) : calling "initialize": EOF`.
-* **Root Cause:** Opening the database relative to the working directory (`storage.NewDB("graph.db")`) failed because the IDE launches global MCP background processes with the CWD set to the system root `/`, which is write-protected under macOS System Integrity Protection (SIP).
-* **Resolution:** Moved database initialization inside the MCP tool callback, dynamically resolving the database path using the target codebase folder (`filepath.Join(projectPath, "graph.db")`). The server now boots globally in a clean, dormant state and only writes databases inside writable workspace folders.
+| Tool | Category | Description |
+|---|---|---|
+| `search_symbols(project_path, query, kind?, limit?)` | Orientation | Full-text FTS5 matching on symbol names with in-memory substring fallback. |
+| `get_context(project_path, symbol, radius?, include_source?)` | Orientation | Context pack: definition site, callers, callees, inheritance hierarchy, and optional raw source slice. |
+| `get_task_context(project_path, task, limit?)` | Context Engine | Analyzes a natural language task description, scores seed symbols, expands neighborhoods, and returns a bounded context pack. |
+| `impact_of_change(project_path, symbol, change_type?, max_depth?, limit?)` | Change Reasoning | Calculates blast radius of modifying or deleting a symbol: transitive callers, affected test suites, and dangling references. |
+| `trace(project_path, from, to?, direction?, max_depth?, limit?)` | Flow Reasoning | Traces forward execution call trees (with recursion markers) or finds execution call paths between two symbols. |
+| `repo_overview(project_path, analysis?, level?, top?)` | Whole-Repo | Architectural overview: quotient graph with Mermaid diagram, Tarjan SCC circular dependencies, dead code candidates, and module coupling metrics. |
 
-### Case Study 3: Asynchronous Read-Before-Write Race Condition
-* **Symptoms:** The first call to `get_callers` on a codebase returned `No callers found`, but subsequent manual checks in the SQLite file showed the data was there.
-* **Root Cause:** `GetCallers()` executed immediately after `crawlAndParse` returned. However, because database writes were processed asynchronously in the background queue, the query ran on an empty or partially populated database before the queue could finish draining. The connection was only closed (draining the queue) at the end of the tool invocation.
-* **Resolution:** Added a `Flush()` method to the database using `sync.WaitGroup`. Immediately after the crawling function returns, the server calls `db.Flush()`, blocking the handler thread until the background writer finishes executing every single queued write.
+---
 
-### Case Study 4: Missing Method Callers (`self.win_exists()`)
-* **Symptoms:** Querying callers of `win_exists` returned `No callers found` despite being called multiple times inside `visdom`.
-* **Root Cause:** The parser query was configured as `(call function: (identifier) @callee)`. In Python, a method call like `self.win_exists()` parses as an `(attribute)` node where the actual function identifier is nested inside `attribute: (identifier)`. The parser was ignoring all attribute-scoped method calls.
-* **Resolution:** Updated the Tree-sitter query to use **alternation** to match both syntax structures:
-  ```query
-  (call
-      function: [
-          (identifier) @callee
-          (attribute
-              attribute: (identifier) @callee)
-      ])
-  ```
+## 4. Key Design Decisions
+
+### External Cache Storage
+* **Decision**: All databases are saved to `~/.cache/graphcontext/<repo_hash>/graph.db`.
+* **Rationale**: Placing database files inside analyzed repositories pollutes working trees, breaks git statuses, and triggers unwanted file watcher events.
+
+### Dual-Layer Storage (SQLite + In-Memory Adjacency Lists)
+* **Decision**: SQLite handles durable storage; graph algorithms operate on an in-memory dual adjacency graph (`In` and `Out` maps).
+* **Rationale**: Recursive graph traversals (Tarjan's SCC, multi-depth BFS, quotient graphs) are computationally heavy as SQL CTEs but take milliseconds in Go memory. The in-memory graph is lazily reloaded only when `indexer.EnsureFresh` detects file hash differences.
+
+### Two-Pass Reference Resolution
+* **Decision**: Parsers emit language-neutral intermediate representations (`FileIR`) with unresolved references (`Ref`). Resolution runs globally across all parsed files in Pass 2.
+* **Rationale**: Eliminates cross-file parsing order dependencies. Resolves circular imports, method receivers, and cross-package references with full type awareness.
+
+### Stdio Stream Isolation
+* **Decision**: Standard output (`os.Stdout`) is strictly dedicated to JSON-RPC framing. All log outputs, progress notices, and diagnostic traces are routed to `os.Stderr`.
+* **Rationale**: Any non-JSON print to `os.Stdout` corrupts the MCP protocol stream and causes client disconnections.
+
+---
+
+## 5. Encountered Issues & Fixes
+
+### 1. JSON-RPC Stream Corruption via `os.Stdout`
+* **Issue**: The MCP client failed with `invalid character 'S' looking for beginning of value`.
+* **Root Cause**: Early code used standard `fmt.Printf` for logging, writing raw text to stdout where the client expected JSON-RPC messages.
+* **Fix**: Replaced all diagnostics across parsers, indexers, and servers with `fmt.Fprintf(os.Stderr, ...)`.
+
+### 2. Root Directory Permission Crashes (macOS SIP)
+* **Issue**: Server crashed with `unable to open database file (14) : EOF`.
+* **Root Cause**: The IDE launched the MCP background process with the current working directory set to system root `/`, which is write-protected under macOS System Integrity Protection.
+* **Fix**: Switched to `store.CachePathFor`, dynamically resolving cache directories under the user's home cache directory (`os.UserCacheDir()`).
+
+### 3. Asynchronous Read-Before-Write Race Condition
+* **Issue**: Calling tools returned `No callers found` on initial scans, but manual inspection showed data present later.
+* **Root Cause**: Asynchronous background writer queues had not finished flushing before read queries executed.
+* **Fix**: Implemented synchronous batch transactions in `pkg/store` combined with `EnsureFresh` verification before query dispatch.
+
+### 4. Method Calls Dropped in AST Queries
+* **Issue**: Function callers failed to capture method calls like `self.win_exists()`.
+* **Root Cause**: Tree-sitter query only matched direct identifier calls `(call function: (identifier) @callee)`. In Python, method calls are attribute nodes `(attribute attribute: (identifier) @callee)`.
+* **Fix**: Added query alternations to match both standalone identifiers and attribute accessors.
+
+---
+
+## 6. Development & Testing
+
+```bash
+# Run all tests across the repository
+go test -v ./...
+
+# Run MCP server tests specifically
+go test -v ./pkg/mcp_server/...
+
+# Build the executable
+go build -o graphcontext main.go
+```
