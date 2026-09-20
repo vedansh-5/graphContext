@@ -12,6 +12,8 @@ This document tracks all project-specific directives, architecture rules, and wo
   * Updated tracking documentation (`progress.md`).
 * **Step-by-Step Progress**: Complete and verify each PR before advancing to the next task.
 * **Concise PR Descriptions**: Every PR must include a brief technical description covering what changed and the underlying technical details.
+* **Always Sign-Off Commits**: Always include a signed-off-by trailer in git commits (`git commit -s`).
+* **Squash Merge**: Always squash merge every pull request (`gh pr merge --squash`).
 
 ---
 

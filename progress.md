@@ -74,13 +74,38 @@
 
 ---
 
+---
+
 ## Active Milestone
 
 ### M2 — Change Intelligence
+
+#### M2.1 — Unified Git Diff Parser & AST Symbol Mapping
+- PR: [#7](https://github.com/vedansh-5/graphContext/pull/7)
+- Branch: `feat/m2-diff-parser`
+- Package: `pkg/diff`
+- Deliverables:
+  - Unified diff parser (`ParseUnifiedDiff`) extracting file paths, hunks, line deltas, and condensed line ranges.
+  - Safe Git diff runner (`RunGitDiff`) supporting uncommitted, staged, and branch comparisons.
+  - AST symbol mapper (`MapDiffToSymbols`) intersecting diff line numbers with `store.Node` spans to classify `modified`, `added`, or `deleted` symbols.
+  - Unit test suite in `pkg/diff/diff_test.go` covering multi-hunk diffs, created/deleted files, git execution, and symbol mapping.
+
+#### M2.2 — Predictive Test Selection Engine (Upcoming)
+- Package: `pkg/testselect`
 - Goals:
-  - Diff-aware impact analysis (`git diff` parsing to identify modified AST symbols).
-  - Smart test selection based on reverse reachability from changed symbols.
-  - Architectural boundary rules and linter.
+  - Reverse reachability traversal from changed AST symbols to identify reaching test nodes.
+  - Minimal, ranked test file and test function selection with provenance.
+
+#### M2.3 — Architectural Boundary Linter (Upcoming)
+- Package: `pkg/archlint`
+- Goals:
+  - Declarative layer boundary and forbidden dependency rules.
+  - Edge diff validation flagging architectural violations before commit.
+
+#### M2.4 — MCP Change Intelligence Integration (Upcoming)
+- Package: `pkg/mcp_server`
+- Goals:
+  - Expose `diff_impact` and git-aware change intelligence to AI agents over MCP stdio.
 
 ---
 
