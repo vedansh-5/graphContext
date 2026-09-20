@@ -90,11 +90,15 @@
   - AST symbol mapper (`MapDiffToSymbols`) intersecting diff line numbers with `store.Node` spans to classify `modified`, `added`, or `deleted` symbols.
   - Unit test suite in `pkg/diff/diff_test.go` covering multi-hunk diffs, created/deleted files, git execution, and symbol mapping.
 
-#### M2.2 — Predictive Test Selection Engine (Upcoming)
+#### M2.2 — Predictive Test Selection Engine
+- Branch: `feat/m2-test-selection`
 - Package: `pkg/testselect`
-- Goals:
-  - Reverse reachability traversal from changed AST symbols to identify reaching test nodes.
-  - Minimal, ranked test file and test function selection with provenance.
+- Deliverables:
+  - Predictive test selector (`SelectTests`) running `ReverseReach` across `calls`, `inherits`, and `overrides` to locate reaching tests.
+  - Test ranking by call graph distance (`depth`), resolution confidence, and deterministic node IDs.
+  - Repo-wide test reduction metric calculation (`ReductionPercent`).
+  - Git diff integration (`SelectTestsFromDiff`) combining diff parsing, AST mapping, and test selection into one pipeline.
+  - Comprehensive unit test suite in `pkg/testselect/testselect_test.go`.
 
 #### M2.3 — Architectural Boundary Linter (Upcoming)
 - Package: `pkg/archlint`
