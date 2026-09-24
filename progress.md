@@ -146,6 +146,18 @@
   - Non-blocking sync event subscription pipeline for downstream clients.
   - Comprehensive unit and integration test suite in `pkg/daemon/daemon_test.go`.
 
+#### M3.3 — Idle Session Eviction & Resource Lifecycle (Up Next)
+- Package: `pkg/daemon`
+- Deliverables:
+  - LRU / TTL session reaper evicting dormant repository graphs and idle SQLite connections to keep memory bounded.
+  - Graceful shutdown handlers trapping `SIGINT`/`SIGTERM` to flush pending writes cleanly.
+
+#### M3.4 — CLI Watch Mode & MCP Live Server Integration
+- Package: `cmd/graphcontext` & `pkg/mcp_server`
+- Deliverables:
+  - `graphcontext watch <path>` CLI subcommand for standalone daemon execution.
+  - Wire MCP `session.go` to query the live in-memory daemon graph for sub-millisecond query responses without cold indexing.
+
 ---
 
 ## Roadmap
