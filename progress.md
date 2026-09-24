@@ -135,6 +135,17 @@
   - Extensible path filtering skipping VCS directories, virtual environments, build artifacts, and non-code files.
   - Comprehensive unit test suite covering event coalescing, live file CRUD, dynamic subdirectories, and exclusion rules.
 
+#### M3.2 — Live In-Memory Graph Incremental Updater
+- PR: [#12](https://github.com/vedansh-5/graphContext/pull/12)
+- Branch: `feat/m3-daemon`
+- Package: `pkg/daemon`
+- Deliverables:
+  - Long-running repository daemon coordinating between `pkg/watcher`, `pkg/indexer`, `pkg/store`, and `pkg/analysis`.
+  - Atomic pointer swaps under `sync.RWMutex` providing thread-safe concurrent reader access without race conditions or partial states.
+  - Event-driven background sync responding to debounced file change batches with real-time SQLite sync.
+  - Non-blocking sync event subscription pipeline for downstream clients.
+  - Comprehensive unit and integration test suite in `pkg/daemon/daemon_test.go`.
+
 ---
 
 ## Roadmap
