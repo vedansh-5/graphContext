@@ -1,146 +1,223 @@
-# graphContext — Graph Reasoning Engine for AI Software Engineers
+# graphContext
 
-`graphContext` is a high-performance, local Model Context Protocol (MCP) server written in Go. It dynamically indexes multi-language codebases (**Go**, **Python**, and **TypeScript/JavaScript**) into a queryable relational graph and in-memory analysis engine, exposing deterministic graph reasoning tools for AI coding agents (Claude, GPT, Gemini, local models).
+**A local code-graph reasoning engine for AI coding agents, written in Go.**
+
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![MCP](https://img.shields.io/badge/protocol-MCP-black)](https://modelcontextprotocol.io)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE.txt)
+
+`graphContext` is a Model Context Protocol (MCP) server that indexes **Go**, **Python**, and **TypeScript/JavaScript** codebases into a queryable relational graph, then exposes deterministic graph reasoning as tools an agent can call — blast radius, call traces, dependency paths, circular dependencies, dead code, affected tests, and architecture maps.
+
+Everything runs locally. No embeddings, no network calls, no vector database.
 
 ---
 
-## 1. System Architecture & Philosophy
+## Why
 
-AI agents waste context window capacity rediscovering code structure that can be statically known. `graphContext` inverts this division of labor:
-* **The Graph Computes**: Deterministic algorithms calculate blast radii, call trees, dependency paths, circular dependencies, dead code, and module architecture maps.
-* **The LLM Explains**: The agent receives compact, structured JSON carrying exact file and line provenance.
+AI agents burn context window rediscovering structure that can be known statically. Asking "what breaks if I change this function?" by grepping and reading files is expensive, slow, and probabilistic. `graphContext` splits the work:
 
-```mermaid
-graph TD
-    A[Codebase Files: Go / Python / TypeScript] -->|Crawled by extension| B[Pass 1: AST Extraction]
-    B -->|Language Plugins: Tree-sitter| C[FileIR: Nodes, Imports, Unresolved Refs]
-    C -->|Global Indexing| D[Pass 2: Reference Resolver]
-    D -->|Receiver Types, Interfaces, Scopes| E[Resolved Nodes & Typed Edges]
-    E -->|SHA-256 Hashing & Change Detection| F[Pass 3: Incremental Indexer]
-    F -->|Batch Writes / WAL| G[(SQLite Schema v3: ~/.cache/graphcontext/...)]
-    G -->|Hydrate on Change| H[In-Memory Graph: Dual Adjacency Lists]
-    H -->|Pure Algorithms| I[Analysis Engine: BFS, Tarjan SCC, Quotient]
-    I -->|Uniform JSON Envelopes| J[MCP Server: Stdio JSON-RPC]
-    J -->|6 Reasoning Tools| K[AI Agents / IDEs]
+* **The graph computes.** Deterministic algorithms answer structural questions exactly.
+* **The LLM explains.** The agent receives compact JSON with exact file and line provenance.
+
+The same repository state always yields byte-identical answers.
+
+---
+
+## Quickstart
+
+### Install
+
+```bash
+go install github.com/vedansh-5/graphcontext@latest
 ```
 
----
+Or build from source:
 
-## 2. Core Architectural Layers
+```bash
+git clone https://github.com/vedansh-5/graphContext.git
+cd graphContext
+go build -o graphcontext main.go
+```
 
-### Pass 1: Multi-Language AST Parsing (`pkg/lang`)
-* Language-neutral intermediate representation (`FileIR`, `ImportRef`, `Ref`, `TypeFacts`).
-* Extracted via Tree-sitter for:
-  * **Go** (`pkg/lang/golang`): Functions, methods, receiver types, struct fields, interface method sets, imports, and calls.
-  * **Python** (`pkg/lang/python`): Functions, classes, methods, decorators, inheritance, type annotations, and constructors.
-  * **TypeScript/JavaScript** (`pkg/lang/typescript`): Functions, classes, interfaces, type aliases, class fields, imports/re-exports, and `new` instantiations.
+### Connect to an MCP client
 
-### Pass 2: Cross-File Reference Resolver (`pkg/resolver`)
-* Multi-file symbol and module table mapping imports to concrete file and module nodes.
-* Receiver type propagation resolves method calls on `self`, `this`, `super`, local variables, and selector chains (e.g. `r.db.Query()`).
-* Structural interface satisfaction matching method sets (Go and TypeScript duck typing).
-* Explicit edge confidence tiers: `exact`, `ambiguous`, `name_match`, or `unknown`.
+The server speaks JSON-RPC over stdio and takes no CLI flags — each tool receives an absolute `project_path`, so one server instance can serve many repositories.
 
-### Pass 3: Incremental Hash Indexer (`pkg/indexer`)
-* `EnsureFresh` coordinator computes SHA-256 content hashes of files against indexed states in SQLite.
-* Unchanged files are bypassed completely.
-* Modified files are re-parsed and atomically updated inside SQLite transactions.
-* Deleted files trigger automatic cascading deletions of owned nodes and edges.
+**Claude Code:**
 
-### Storage Engine: Schema v3 & FTS5 (`pkg/store`)
-* Database files are stored externally in `~/.cache/graphcontext/<hash>/graph.db` to avoid repository clutter.
-* SQLite schema v3 includes `nodes`, `edges`, `files`, and `metadata` tables with foreign key constraints and WAL mode.
-* Write-time subword tokenization (`SplitIdentifier`) indexes camelCase, snake_case, and dotted symbols in FTS5 for fast fuzzy lookups.
+```bash
+claude mcp add graphcontext -- /absolute/path/to/graphcontext
+```
 
-### In-Memory Analysis Engine (`pkg/analysis`)
-* Bidirectional in-memory graph (`In` and `Out` adjacency lists) loaded from SQLite on startup.
-* Algorithms execute in memory rather than recursive SQL CTEs:
-  * `ReverseReach`: Layered BFS over incoming edges for impact sets and blast radius.
-  * `ForwardReach`: Layered BFS over outgoing edges for dependency analysis.
-  * `Trace`: Forward execution call-tree with cycle detection and depth/breadth budgets.
-  * `Neighborhood`: Subgraph extraction around seed nodes.
-  * `PathsBetween`: Multi-hop call path enumeration with line numbers.
-  * `SCCs`: Tarjan's Strongly Connected Components algorithm for circular dependency detection.
-  * `DeadCandidates`: Multi-source BFS from roots (`main`, tests, routes) to find unreachable code.
-  * `Condense`: Module-level quotient graph computing coupling weights and generating Mermaid architecture diagrams.
+**Claude Desktop / any client using `mcpServers` config:**
 
----
-
-## 3. The 6 MCP Reasoning Tools
-
-Every tool returns a uniform response envelope:
 ```json
 {
-  "answer": { "...structured facts..." },
-  "caveats": ["...honest confidence disclosures..."],
-  "stats": { "nodes_evaluated": 120, "truncated": false }
+  "mcpServers": {
+    "graphcontext": {
+      "command": "/absolute/path/to/graphcontext"
+    }
+  }
 }
 ```
 
-| Tool | Category | Description |
-|---|---|---|
-| `search_symbols(project_path, query, kind?, limit?)` | Orientation | Full-text FTS5 matching on symbol names with in-memory substring fallback. |
-| `get_context(project_path, symbol, radius?, include_source?)` | Orientation | Context pack: definition site, callers, callees, inheritance hierarchy, and optional raw source slice. |
-| `get_task_context(project_path, task, limit?)` | Context Engine | Analyzes a natural language task description, scores seed symbols, expands neighborhoods, and returns a bounded context pack. |
-| `impact_of_change(project_path, symbol, change_type?, max_depth?, limit?)` | Change Reasoning | Calculates blast radius of modifying or deleting a symbol: transitive callers, affected test suites, and dangling references. |
-| `trace(project_path, from, to?, direction?, max_depth?, limit?)` | Flow Reasoning | Traces forward execution call trees (with recursion markers) or finds execution call paths between two symbols. |
-| `repo_overview(project_path, analysis?, level?, top?)` | Whole-Repo | Architectural overview: quotient graph with Mermaid diagram, Tarjan SCC circular dependencies, dead code candidates, and module coupling metrics. |
+On the first tool call against a repository, the indexer performs a full three-pass parse. Subsequent calls hash file contents and re-parse only what changed.
+
+Indexes live in `~/.cache/graphcontext/<repo_hash>/graph.db`, never inside the analyzed repository.
 
 ---
 
-## 4. Key Design Decisions
+## Tools
 
-### External Cache Storage
-* **Decision**: All databases are saved to `~/.cache/graphcontext/<repo_hash>/graph.db`.
-* **Rationale**: Placing database files inside analyzed repositories pollutes working trees, breaks git statuses, and triggers unwanted file watcher events.
+Every tool returns a uniform envelope, so callers parse one shape:
 
-### Dual-Layer Storage (SQLite + In-Memory Adjacency Lists)
-* **Decision**: SQLite handles durable storage; graph algorithms operate on an in-memory dual adjacency graph (`In` and `Out` maps).
-* **Rationale**: Recursive graph traversals (Tarjan's SCC, multi-depth BFS, quotient graphs) are computationally heavy as SQL CTEs but take milliseconds in Go memory. The in-memory graph is lazily reloaded only when `indexer.EnsureFresh` detects file hash differences.
+```json
+{
+  "answer":  { "...structured facts..." },
+  "caveats": ["...honest confidence disclosures..."],
+  "stats":   { "nodes_evaluated": 120, "truncated": false }
+}
+```
 
-### Two-Pass Reference Resolution
-* **Decision**: Parsers emit language-neutral intermediate representations (`FileIR`) with unresolved references (`Ref`). Resolution runs globally across all parsed files in Pass 2.
-* **Rationale**: Eliminates cross-file parsing order dependencies. Resolves circular imports, method receivers, and cross-package references with full type awareness.
+All tools take `project_path` as the first argument.
 
-### Stdio Stream Isolation
-* **Decision**: Standard output (`os.Stdout`) is strictly dedicated to JSON-RPC framing. All log outputs, progress notices, and diagnostic traces are routed to `os.Stderr`.
-* **Rationale**: Any non-JSON print to `os.Stdout` corrupts the MCP protocol stream and causes client disconnections.
-
----
-
-## 5. Encountered Issues & Fixes
-
-### 1. JSON-RPC Stream Corruption via `os.Stdout`
-* **Issue**: The MCP client failed with `invalid character 'S' looking for beginning of value`.
-* **Root Cause**: Early code used standard `fmt.Printf` for logging, writing raw text to stdout where the client expected JSON-RPC messages.
-* **Fix**: Replaced all diagnostics across parsers, indexers, and servers with `fmt.Fprintf(os.Stderr, ...)`.
-
-### 2. Root Directory Permission Crashes (macOS SIP)
-* **Issue**: Server crashed with `unable to open database file (14) : EOF`.
-* **Root Cause**: The IDE launched the MCP background process with the current working directory set to system root `/`, which is write-protected under macOS System Integrity Protection.
-* **Fix**: Switched to `store.CachePathFor`, dynamically resolving cache directories under the user's home cache directory (`os.UserCacheDir()`).
-
-### 3. Asynchronous Read-Before-Write Race Condition
-* **Issue**: Calling tools returned `No callers found` on initial scans, but manual inspection showed data present later.
-* **Root Cause**: Asynchronous background writer queues had not finished flushing before read queries executed.
-* **Fix**: Implemented synchronous batch transactions in `pkg/store` combined with `EnsureFresh` verification before query dispatch.
-
-### 4. Method Calls Dropped in AST Queries
-* **Issue**: Function callers failed to capture method calls like `self.win_exists()`.
-* **Root Cause**: Tree-sitter query only matched direct identifier calls `(call function: (identifier) @callee)`. In Python, method calls are attribute nodes `(attribute attribute: (identifier) @callee)`.
-* **Fix**: Added query alternations to match both standalone identifiers and attribute accessors.
+| Tool | Purpose |
+|---|---|
+| `search_symbols(query, kind?, limit?)` | FTS5 symbol search with subword tokenization (camelCase, snake_case, dotted) and in-memory substring fallback. |
+| `get_context(symbol, radius?, include_source?)` | Context pack for one symbol: definition site, callers, callees, inheritance, optional source slice. |
+| `get_task_context(task, limit?)` | Takes a natural-language task, scores seed symbols, expands neighborhoods, returns a bounded context pack. |
+| `impact_of_change(symbol, change_type?, max_depth?, limit?)` | Blast radius of modifying or deleting a symbol: transitive callers, affected tests, dangling references. |
+| `trace(from, to?, direction?, max_depth?, limit?)` | Forward call tree with recursion markers, or enumerated call paths between two symbols. |
+| `repo_overview(analysis?, level?, top?)` | Module quotient graph with a generated Mermaid diagram, Tarjan SCC cycles, dead-code candidates, coupling metrics. |
+| `diff_impact(diff? \| git_ref? \| staged?, rule_file?)` | Maps a git diff onto AST symbols, then selects the minimal reaching test set and flags architectural boundary violations. |
 
 ---
 
-## 6. Development & Testing
+## Architecture
+
+```mermaid
+graph TD
+    A[Codebase: Go / Python / TypeScript] -->|Crawled by extension| B[Pass 1: AST Extraction]
+    B -->|Tree-sitter language plugins| C[FileIR: Nodes, Imports, Unresolved Refs]
+    C -->|Global symbol and module index| D[Pass 2: Reference Resolver]
+    D -->|Receiver types, interfaces, scopes| E[Resolved Nodes and Typed Edges]
+    E -->|SHA-256 hashing and change detection| F[Pass 3: Incremental Indexer]
+    F -->|Batched transactional writes, WAL| G[(SQLite schema v3)]
+    G -->|Hydrate on change| H[In-Memory Graph: Dual Adjacency Lists]
+    H -->|Pure algorithms| I[Analysis Engine: BFS, Tarjan SCC, Quotient]
+    I -->|Uniform JSON envelopes| J[MCP Server: stdio JSON-RPC]
+    J --> K[AI Agents / IDEs]
+    L[File Watcher: fsnotify + debounce] -->|Debounced change batches| M[Daemon]
+    M -->|Atomic graph pointer swap| H
+```
+
+### Pass 1 — Multi-language AST parsing (`pkg/lang`)
+
+Language-neutral IR (`FileIR`, `ImportRef`, `Ref`, `TypeFacts`) extracted via Tree-sitter:
+
+* **Go** (`pkg/lang/golang`) — functions, methods, receiver types, struct fields, interface method sets, imports, calls.
+* **Python** (`pkg/lang/python`) — functions, classes, methods, decorators, inheritance, type annotations, constructors.
+* **TypeScript/JavaScript** (`pkg/lang/typescript`) — functions, classes, interfaces, type aliases, class fields, imports/re-exports, `new` instantiations.
+
+### Pass 2 — Cross-file reference resolution (`pkg/resolver`)
+
+* Global symbol and module tables map imports to concrete file and module nodes.
+* Receiver type propagation resolves calls on `self`, `this`, `super`, local variables, and selector chains (`r.db.Query()`).
+* Structural interface satisfaction via method-set subset matching (Go and TypeScript duck typing).
+* Every edge carries an explicit confidence tier: `exact`, `ambiguous`, `name_match`, or `unknown`.
+
+### Pass 3 — Incremental hash indexing (`pkg/indexer`)
+
+`EnsureFresh` compares SHA-256 content hashes against indexed state. Unchanged files are skipped entirely; modified files are re-parsed and updated inside a single transaction; deleted files cascade-delete their nodes and edges.
+
+### Storage (`pkg/store`)
+
+SQLite schema v3 — `nodes`, `edges`, `files`, `metadata` — with foreign key constraints and WAL mode. Write-time subword tokenization (`SplitIdentifier`) feeds FTS5 for fuzzy symbol lookup.
+
+### Analysis engine (`pkg/analysis`)
+
+A bidirectional in-memory graph (`In` / `Out` adjacency lists) hydrated from SQLite. Algorithms run in Go memory rather than as recursive SQL CTEs:
+
+| Function | What it does |
+|---|---|
+| `ReverseReach` | Layered BFS over incoming edges — impact sets and blast radius. |
+| `ForwardReach` | Layered BFS over outgoing edges — dependency analysis. |
+| `Trace` | Forward call tree with cycle detection and depth/breadth budgets. |
+| `Neighborhood` | Subgraph extraction around seed nodes. |
+| `PathsBetween` | Multi-hop call path enumeration with line numbers. |
+| `SCCs` | Tarjan's algorithm for circular dependency detection. |
+| `DeadCandidates` | Multi-source BFS from roots (`main`, tests, routes) for unreachable code. |
+| `Condense` | Module quotient graph with coupling weights and Mermaid generation. |
+
+### Change intelligence (`pkg/diff`, `pkg/testselect`, `pkg/archlint`)
+
+* **`pkg/diff`** — parses unified diff hunks and intersects changed line ranges with AST node spans to classify symbols as `added`, `modified`, or `deleted`.
+* **`pkg/testselect`** — runs `ReverseReach` from changed symbols across `calls`, `inherits`, and `overrides` edges to find reaching tests, ranked by call-graph distance and edge confidence. Reports the repo-wide test reduction percentage.
+* **`pkg/archlint`** — declarative `RuleSet` / `ForbiddenRule` / `LayerRule` definitions loaded from JSON, enforced either across the whole graph or scoped to edges introduced by a diff.
+
+### Live daemon (`pkg/watcher`, `pkg/daemon`)
+
+* **`pkg/watcher`** — recursive `fsnotify` watcher with dynamic subdirectory discovery, a sliding-window debouncer that coalesces create/modify/delete events, and path filters for VCS directories, virtualenvs, and build artifacts.
+* **`pkg/daemon`** — long-running coordinator that reacts to debounced batches, re-indexes incrementally, and publishes a rebuilt graph via an atomic pointer swap under `sync.RWMutex`. Readers never observe a partial graph.
+
+---
+
+## Design decisions
+
+**Indexes live outside the repository.** Database files inside an analyzed repo pollute working trees, dirty `git status`, and trigger the file watcher in a feedback loop. Everything goes to `~/.cache/graphcontext/<repo_hash>/graph.db`.
+
+**Dual-layer storage: SQLite for durability, in-memory adjacency lists for traversal.** Tarjan's SCC, multi-depth BFS, and quotient graphs are expensive as recursive CTEs but take milliseconds over Go maps. The in-memory graph is lazily reloaded only when `EnsureFresh` reports a hash difference.
+
+**Two-pass resolution instead of single-pass.** Parsers emit IR with unresolved `Ref`s; resolution runs globally after all files are parsed. This removes parse-order dependencies and makes circular imports, method receivers, and cross-package references resolvable with full type awareness.
+
+**Strict stdio isolation.** `os.Stdout` is reserved exclusively for JSON-RPC framing. Every log line, progress notice, and diagnostic goes to `os.Stderr` — a single stray `fmt.Printf` corrupts the protocol stream and disconnects the client.
+
+**Deterministic output.** Go randomizes map iteration order, so every slice derived from a map or set is sorted before it reaches a response. Confidence tiers are surfaced as caveats rather than hidden behind a guess.
+
+---
+
+## Development
 
 ```bash
-# Run all tests across the repository
-go test -v ./...
-
-# Run MCP server tests specifically
-go test -v ./pkg/mcp_server/...
-
-# Build the executable
-go build -o graphcontext main.go
+go test ./...                     # full suite
+go test -v ./pkg/mcp_server/...   # MCP server end-to-end tests
+go build -o graphcontext main.go  # build
 ```
+
+Contribution conventions — small sequential PRs, signed-off commits, squash merges, `progress.md` updated per PR — are documented in [`instructions.md`](instructions.md). Milestone history lives in [`progress.md`](progress.md).
+
+---
+
+## Roadmap
+
+| Milestone | Status |
+|---|---|
+| M0 — Storage, language layer, resolver, incremental indexer | Done |
+| M1 — In-memory analysis engine and core MCP tools | Done |
+| M2 — Change intelligence: diff mapping, test selection, arch linting | Done |
+| M3 — Daemon and live file watcher | In progress |
+| M4 — Validation: token-cost and resolver accuracy benchmarks | Planned |
+| M5 — Research artifact: mutation-derived agent evaluation | Planned |
+
+---
+
+## Engineering notes
+
+<details>
+<summary>Four bugs worth remembering</summary>
+
+**JSON-RPC stream corruption.** The client failed with `invalid character 'S' looking for beginning of value`. Early logging used `fmt.Printf`, writing plain text into the stream where the client expected JSON-RPC frames. Fixed by routing every diagnostic through `fmt.Fprintf(os.Stderr, ...)`.
+
+**Root directory permission crash on macOS.** The server died with `unable to open database file (14) : EOF`. The IDE launched the MCP process with its working directory set to `/`, which is write-protected under System Integrity Protection. Fixed by resolving cache paths through `os.UserCacheDir()` in `store.CachePathFor`.
+
+**Read-before-write race.** Tools returned `No callers found` on first scan even though the data appeared moments later. Asynchronous writer queues hadn't flushed before reads dispatched. Fixed with synchronous batch transactions plus an `EnsureFresh` barrier before query dispatch.
+
+**Dropped Python method calls.** Callers of `self.win_exists()` were invisible. The Tree-sitter query only matched `(call function: (identifier) @callee)`, but Python method calls are attribute nodes. Fixed by adding a query alternation for `(attribute attribute: (identifier) @callee)`.
+
+</details>
+
+---
+
+## License
+
+[Apache 2.0](LICENSE.txt)
