@@ -124,22 +124,22 @@ func EnsureFresh(repoRoot string, s *store.Store) (bool, error) {
 	batch := store.NewBatch()
 	now := time.Now().UTC()
 
+	// Only files whose content changed need a new record; only nodes and edges
+	// that differ from what is stored need writing.
 	for _, fd := range toParse {
-		batch.TouchFile(store.FileRecord{
-			Path:        fd.rel,
-			ContentHash: fd.hash,
-			IndexedAt:   now,
-		})
+		if stored[fd.rel] != fd.hash {
+			batch.RecordFile(store.FileRecord{
+				Path:        fd.rel,
+				ContentHash: fd.hash,
+				IndexedAt:   now,
+			})
+		}
 	}
 	for _, d := range deleted {
 		batch.RemoveFile(d)
 	}
-
-	for _, n := range res.Nodes {
-		batch.AddNode(n)
-	}
-	for _, e := range res.Edges {
-		batch.AddEdge(e)
+	if err := queueGraphDiff(s, batch, res); err != nil {
+		return false, err
 	}
 
 	if err := s.Commit(batch); err != nil {
