@@ -160,6 +160,8 @@ A bidirectional in-memory graph (`In` / `Out` adjacency lists) hydrated from SQL
 * **`pkg/watcher`** — recursive `fsnotify` watcher with dynamic subdirectory discovery, a sliding-window debouncer that coalesces create/modify/delete events, and path filters for VCS directories, virtualenvs, and build artifacts.
 * **`pkg/daemon`** — long-running coordinator that reacts to debounced batches, re-indexes incrementally, and publishes a rebuilt graph via an atomic pointer swap under `sync.RWMutex`. Readers never observe a partial graph.
 
+The MCP server runs one daemon per project. A project that goes unused for 30 minutes has its watcher, graph and database handle released, and is reopened from cache on its next tool call. Set `GRAPHCONTEXT_IDLE_TTL` (a Go duration, e.g. `10m`) to change the timeout.
+
 ---
 
 ## Design decisions
