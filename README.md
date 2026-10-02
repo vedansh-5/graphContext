@@ -6,7 +6,7 @@
 [![MCP](https://img.shields.io/badge/protocol-MCP-black)](https://modelcontextprotocol.io)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE.txt)
 
-`graphContext` is a Model Context Protocol (MCP) server that indexes **Go**, **Python**, and **TypeScript/JavaScript** codebases into a queryable relational graph, then exposes deterministic graph reasoning as tools an agent can call — blast radius, call traces, dependency paths, circular dependencies, dead code, affected tests, and architecture maps.
+`graphContext` is a Model Context Protocol (MCP) server that indexes codebases in **13 languages** into a queryable relational graph, then exposes deterministic graph reasoning as tools an agent can call — blast radius, call traces, dependency paths, circular dependencies, dead code, affected tests, and architecture maps.
 
 Everything runs locally. No embeddings, no network calls, no vector database.
 
@@ -112,7 +112,7 @@ All tools take `project_path` as the first argument.
 
 ```mermaid
 graph TD
-    A[Codebase: Go / Python / TypeScript] -->|Crawled by extension| B[Pass 1: AST Extraction]
+    A[Codebase: 13 languages] -->|Crawled by extension| B[Pass 1: AST Extraction]
     B -->|Tree-sitter language plugins| C[FileIR: Nodes, Imports, Unresolved Refs]
     C -->|Global symbol and module index| D[Pass 2: Reference Resolver]
     D -->|Receiver types, interfaces, scopes| E[Resolved Nodes and Typed Edges]
@@ -133,6 +133,27 @@ Language-neutral IR (`FileIR`, `ImportRef`, `Ref`, `TypeFacts`) extracted via Tr
 * **Go** (`pkg/lang/golang`) — functions, methods, receiver types, struct fields, interface method sets, imports, calls.
 * **Python** (`pkg/lang/python`) — functions, classes, methods, decorators, inheritance, type annotations, constructors.
 * **TypeScript/JavaScript** (`pkg/lang/typescript`) — functions, classes, interfaces, type aliases, class fields, imports/re-exports, `new` instantiations.
+
+Those three are hand-written and track imports and variable types, so most of their calls resolve as `exact`.
+
+Ten more run on a shared table-driven engine (`pkg/lang/generic`), where a language is a short `Spec` naming its grammar's node types:
+
+| Language | Extensions |
+|---|---|
+| Java | `.java` |
+| Rust | `.rs` |
+| C# | `.cs` |
+| C | `.c`, `.h` |
+| C++ | `.cc`, `.cpp`, `.cxx`, `.hh`, `.hpp`, `.hxx` |
+| Ruby | `.rb`, `.rake` |
+| PHP | `.php` |
+| Kotlin | `.kt`, `.kts` |
+| Swift | `.swift` |
+| Scala | `.scala`, `.sc` |
+
+The engine extracts types, functions and methods, calls, inheritance, and test and entry-point flags. It does not read imports or variable types, so cross-file calls in these languages resolve by name and are marked `name_match` or `ambiguous`. Names are never matched across languages.
+
+To add a language, write a `Spec` in `pkg/lang/generic` and a test showing what it extracts; nothing else needs to change.
 
 ### Pass 2 — Cross-file reference resolution (`pkg/resolver`)
 

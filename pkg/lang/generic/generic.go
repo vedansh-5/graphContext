@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/vedansh-5/graphcontext/pkg/lang"
@@ -79,6 +80,11 @@ type Spec struct {
 	// declaration, and child node types of the declaration.
 	BaseFields []string
 	BaseNodes  []string
+
+	// IsExtension reports that a type node adds members to an existing type
+	// instead of declaring one (a Swift extension). Its methods join that
+	// type and no new node is created.
+	IsExtension func(Decl) bool
 
 	// IsTest, IsMain and IsExported classify a declaration. All optional;
 	// by default nothing is a test or entry point and everything is exported.
@@ -157,6 +163,9 @@ func (p Plugin) typeDecl(n *sitter.Node, kind store.NodeKind, src []byte, path s
 	}
 	name := typeName(declName(n, src))
 	if name == "" {
+		return
+	}
+	if p.spec.IsExtension != nil && p.spec.IsExtension(Decl{Path: path, Name: name, Node: n, Src: src}) {
 		return
 	}
 	// A nested type is named on its own: type names are what calls and
@@ -283,6 +292,7 @@ func (p Plugin) bases(n *sitter.Node, src []byte) []string {
 	}
 
 	var out []string
+	seen := map[string]bool{}
 	for _, h := range holders {
 		lang.Walk(h, func(c *sitter.Node) {
 			// Skip generic arguments: List<Foo> extends List, not Foo.
@@ -292,7 +302,8 @@ func (p Plugin) bases(n *sitter.Node, src []byte) []string {
 				}
 			}
 			if c.NamedChildCount() == 0 && identTypes[c.Type()] {
-				if name := lang.Text(c, src); name != "" {
+				if name := lang.Text(c, src); name != "" && !seen[name] {
+					seen[name] = true
 					out = append(out, name)
 				}
 			}
@@ -364,8 +375,12 @@ func splitCallee(callee *sitter.Node, src []byte) (name, recv string) {
 const opaqueReceiver = "<expr>"
 
 func cleanReceiver(recv string) string {
+	recv = strings.TrimSpace(recv)
 	// PHP writes variables as $name; "$this" is the resolver's "this".
-	recv = strings.TrimPrefix(strings.TrimSpace(recv), "$")
+	// Swift's $0 closure argument is left alone.
+	if len(recv) > 1 && recv[0] == '$' && (recv[1] == '_' || unicode.IsLetter(rune(recv[1]))) {
+		recv = recv[1:]
+	}
 	if strings.ContainsAny(recv, "({ \t\n") {
 		return opaqueReceiver
 	}
@@ -482,6 +497,17 @@ func childText(d Decl, typeSubstr string) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// hasKeyword reports whether a declaration has the given keyword token as a
+// direct child, such as "extension" or "static".
+func hasKeyword(d Decl, keyword string) bool {
+	for i := 0; i < int(d.Node.ChildCount()); i++ {
+		if d.Node.Child(i).Type() == keyword {
+			return true
+		}
+	}
+	return false
 }
 
 // precedingText joins the text of the siblings directly before a declaration

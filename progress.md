@@ -168,6 +168,14 @@
   - Re-index after one edit on a 2000-file synthetic repo: 4.8s to 0.06s. Benchmarks in `pkg/indexer/bench_test.go`.
   - Crawler takes its extensions from the language registry and shares one ignore list with the watcher.
 
+### Language breadth
+- PRs: [#23](https://github.com/vedansh-5/graphContext/pull/23), [#24](https://github.com/vedansh-5/graphContext/pull/24), [#25](https://github.com/vedansh-5/graphContext/pull/25), [#26](https://github.com/vedansh-5/graphContext/pull/26), [#27](https://github.com/vedansh-5/graphContext/pull/27)
+- Package: `pkg/lang/generic`
+- Deliverables:
+  - Table-driven language engine: a language is a `Spec` of grammar node types.
+  - Java, Rust, C#, C, C++, Ruby, PHP, Kotlin, Swift and Scala, for 13 languages in total.
+  - Resolver resolves each language family on its own index and treats a type-named receiver as a static call.
+
 ---
 
 ## Roadmap
