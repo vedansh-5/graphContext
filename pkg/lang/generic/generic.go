@@ -62,6 +62,10 @@ type Spec struct {
 
 	// Types maps a node type that declares a type to the kind of node created.
 	Types map[string]store.NodeKind
+	// BodyRequired lists type node types that only declare a type when they
+	// have a body. In C, "struct point p;" uses the same node as the
+	// definition of struct point.
+	BodyRequired map[string]bool
 	// Scopes maps a node type that holds methods for a type without declaring
 	// it (a Rust impl block) to where that type is named.
 	Scopes map[string]Scope
@@ -148,7 +152,10 @@ func (p Plugin) Parse(path string, src []byte) (*lang.FileIR, error) {
 }
 
 func (p Plugin) typeDecl(n *sitter.Node, kind store.NodeKind, src []byte, path string, ir *lang.FileIR, seen map[string]int) {
-	name := declName(n, src)
+	if p.spec.BodyRequired[n.Type()] && n.ChildByFieldName("body") == nil {
+		return
+	}
+	name := typeName(declName(n, src))
 	if name == "" {
 		return
 	}
@@ -251,7 +258,7 @@ func (p Plugin) enclosingType(n *sitter.Node, src []byte) string {
 			}
 		}
 		if _, ok := p.spec.Types[cur.Type()]; ok {
-			if name := declName(cur, src); name != "" {
+			if name := typeName(declName(cur, src)); name != "" {
 				return name
 			}
 		}
@@ -365,7 +372,8 @@ func cleanReceiver(recv string) string {
 	if i := strings.LastIndex(recv, "::"); i >= 0 {
 		recv = recv[i+2:]
 	}
-	return recv
+	// The resolver walks field chains on dots.
+	return strings.ReplaceAll(recv, "->", ".")
 }
 
 func lastIdent(n *sitter.Node, src []byte) string {
