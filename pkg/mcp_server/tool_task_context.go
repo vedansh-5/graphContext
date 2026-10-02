@@ -139,11 +139,11 @@ func handleGetTaskContext(sess *session, projectPath string, args map[string]any
 	})
 
 	answer := map[string]any{
-		"task":              task,
-		"seeds":             seedNodeList,
-		"context_nodes":     contextNodes,
-		"relationships":     relationships,
-		"relevant_files":    relevantFiles,
+		"task":           task,
+		"seeds":          viewNodes(seedNodeList),
+		"context_nodes":  viewNodes(contextNodes),
+		"relationships":  viewEdges(relationships),
+		"relevant_files": relevantFiles,
 	}
 
 	stats := map[string]any{
