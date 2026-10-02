@@ -116,6 +116,17 @@ func (s *Store) FileIRs() (map[string]FileIR, error) {
 	return out, rows.Err()
 }
 
+// Counts returns how many nodes and edges the graph holds.
+func (s *Store) Counts() (nodes, edges int, err error) {
+	if err = s.conn.QueryRow(`SELECT COUNT(*) FROM nodes`).Scan(&nodes); err != nil {
+		return 0, 0, fmt.Errorf("count nodes: %w", err)
+	}
+	if err = s.conn.QueryRow(`SELECT COUNT(*) FROM edges`).Scan(&edges); err != nil {
+		return 0, 0, fmt.Errorf("count edges: %w", err)
+	}
+	return nodes, edges, nil
+}
+
 // ConfidenceCounts returns how many edges carry each confidence level. This is
 // the raw material for the resolution-rate metric.
 func (s *Store) ConfidenceCounts() (map[Confidence]int, error) {

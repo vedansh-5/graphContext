@@ -147,18 +147,19 @@
   - Comprehensive unit and integration test suite in `pkg/daemon/daemon_test.go`.
 
 #### M3.3 — Idle Session Eviction & Resource Lifecycle
-- Branch: `feat/m3-session-eviction`
+- PR: [#21](https://github.com/vedansh-5/graphContext/pull/21)
 - Package: `pkg/mcp_server`
 - Deliverables:
   - Idle reaper closing a project's watcher, graph and SQLite handle after `GRAPHCONTEXT_IDLE_TTL` (default 30m); sessions with a tool call in flight are never evicted.
   - All sessions are closed when the stdio server stops on `SIGINT`/`SIGTERM` or stdin close.
 
 #### M3.4 — CLI Watch Mode & MCP Live Server Integration
-- PR: [#20](https://github.com/vedansh-5/graphContext/pull/20) (MCP half)
-- Package: `pkg/mcp_server`, `pkg/daemon`, `pkg/watcher`
+- PR: [#20](https://github.com/vedansh-5/graphContext/pull/20)
+- Package: `pkg/mcp_server`, `pkg/daemon`, `pkg/watcher`, `pkg/cli`
 - Deliverables:
   - MCP sessions served from the live daemon graph via `Daemon.FreshGraph`, with a watcher sequence number as the read-your-writes barrier.
-  - Up next: `graphcontext watch <path>` CLI subcommand for standalone daemon execution.
+  - `graphcontext watch [dir]` runs the daemon standalone and logs each sync.
+  - `graphcontext run <tool> key=value ...`, `tools` and `index` expose the MCP tools to shells and CI.
 
 #### Indexing performance
 - PRs: [#14](https://github.com/vedansh-5/graphContext/pull/14), [#16](https://github.com/vedansh-5/graphContext/pull/16), [#17](https://github.com/vedansh-5/graphContext/pull/17), [#18](https://github.com/vedansh-5/graphContext/pull/18), [#19](https://github.com/vedansh-5/graphContext/pull/19)

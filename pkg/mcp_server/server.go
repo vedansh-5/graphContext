@@ -8,7 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func StartStdioServer() error {
+func newServer() *server.MCPServer {
 	s := server.NewMCPServer(
 		"graphContext",
 		"2.0.0",
@@ -20,6 +20,11 @@ func StartStdioServer() error {
 	registerReasoningTools(s)
 	registerRepoOverviewTool(s)
 	registerDiffImpactTool(s)
+	return s
+}
+
+func StartStdioServer() error {
+	s := newServer()
 
 	stop := make(chan struct{})
 	go reapIdleSessions(idleTTL(), stop)
