@@ -70,3 +70,16 @@ func reset() {
 	defer mu.Unlock()
 	registry = map[string]Language{}
 }
+
+// families maps a language to the family it resolves names within, for
+// languages that routinely call each other. Anything absent is its own family.
+var families = map[string]string{}
+
+// Family returns the group of languages whose declarations may refer to one
+// another. References are never resolved across families.
+func Family(language string) string {
+	if f, ok := families[language]; ok {
+		return f
+	}
+	return language
+}
