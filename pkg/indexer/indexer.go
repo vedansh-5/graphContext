@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -108,7 +109,16 @@ func EnsureFresh(repoRoot string, s *store.Store) (bool, error) {
 	}
 	wg.Wait()
 
-	changed := false
+	// A different IR version means the plugins now extract something else, so
+	// the stored graph is out of date even if no file changed.
+	irVersion := fmt.Sprint(lang.IRVersion)
+	storedVersion, err := s.Meta(irVersionKey)
+	if err != nil {
+		return false, fmt.Errorf("read ir version: %w", err)
+	}
+	staleIR := storedVersion != irVersion
+
+	changed := staleIR && len(files) > 0
 	for _, fd := range files {
 		if fd.dirty {
 			changed = true
@@ -151,43 +161,75 @@ func EnsureFresh(repoRoot string, s *store.Store) (bool, error) {
 		return false, nil
 	}
 
-	var (
-		parseWg   sync.WaitGroup
-		fileIRs   = make([]*lang.FileIR, len(files))
-		parseErrs = make([]error, len(files))
-	)
+	// Unchanged files reuse their cached parse; only the rest are read and parsed.
+	var cached map[string]store.FileIR
+	if !staleIR {
+		if cached, err = s.FileIRs(); err != nil {
+			return false, fmt.Errorf("read cached parses: %w", err)
+		}
+	}
 
-	for i := range files {
+	var (
+		parseWg sync.WaitGroup
+		fileIRs = make([]*lang.FileIR, len(files))
+		fresh   = make([][]byte, len(files))
+		jobs    = make(chan int)
+	)
+	for w := 0; w < runtime.GOMAXPROCS(0); w++ {
 		parseWg.Add(1)
-		go func(idx int) {
+		go func() {
 			defer parseWg.Done()
-			fd := files[idx]
-			plugin, ok := lang.For(fd.rel)
-			if !ok {
-				return
-			}
-			src := fd.src
-			if src == nil {
-				var err error
-				if src, err = os.ReadFile(fd.path); err != nil {
-					parseErrs[idx] = err
-					return
+			for idx := range jobs {
+				fd := files[idx]
+				if c, ok := cached[fd.rel]; ok && c.ContentHash == fd.hash {
+					if ir, err := decodeIR(c.Data); err == nil {
+						fileIRs[idx] = ir
+						continue
+					}
+				}
+				plugin, ok := lang.For(fd.rel)
+				if !ok {
+					continue
+				}
+				src := fd.src
+				if src == nil {
+					var err error
+					if src, err = os.ReadFile(fd.path); err != nil {
+						continue
+					}
+					// The file may have changed since it was stat'ed; only
+					// cache the parse if it still matches the recorded hash.
+					if hashOf(src) != fd.hash {
+						fd.hash = ""
+					}
+				}
+				ir, err := plugin.Parse(fd.rel, src)
+				if err != nil {
+					continue
+				}
+				fileIRs[idx] = ir
+				if fd.hash != "" {
+					if data, err := encodeIR(ir); err == nil {
+						fresh[idx] = data
+					}
 				}
 			}
-			ir, err := plugin.Parse(fd.rel, src)
-			if err != nil {
-				parseErrs[idx] = err
-				return
-			}
-			fileIRs[idx] = ir
-		}(i)
+		}()
 	}
+	for i := range files {
+		jobs <- i
+	}
+	close(jobs)
 	parseWg.Wait()
 
 	var validIRs []*lang.FileIR
 	for i, ir := range fileIRs {
-		if parseErrs[i] == nil && ir != nil {
-			validIRs = append(validIRs, ir)
+		if ir == nil {
+			continue
+		}
+		validIRs = append(validIRs, ir)
+		if fresh[i] != nil {
+			batch.PutIR(store.FileIR{Path: files[i].rel, ContentHash: files[i].hash, Data: fresh[i]})
 		}
 	}
 
@@ -205,6 +247,11 @@ func EnsureFresh(repoRoot string, s *store.Store) (bool, error) {
 
 	if err := s.Commit(batch); err != nil {
 		return false, fmt.Errorf("commit batch: %w", err)
+	}
+	if staleIR {
+		if err := s.SetMeta(irVersionKey, irVersion); err != nil {
+			return false, fmt.Errorf("record ir version: %w", err)
+		}
 	}
 
 	return true, nil

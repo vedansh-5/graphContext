@@ -105,3 +105,11 @@ type FileRecord struct {
 	Size        int64
 	ModTimeNs   int64
 }
+
+// FileIR is a file's cached parse result. Data is an opaque encoding owned by
+// the indexer; ContentHash is the hash of the source it was parsed from.
+type FileIR struct {
+	Path        string
+	ContentHash string
+	Data        []byte
+}

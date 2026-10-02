@@ -97,6 +97,25 @@ func (s *Store) FileRecords() (map[string]FileRecord, error) {
 	return out, rows.Err()
 }
 
+// FileIRs returns every cached parse result, keyed by path.
+func (s *Store) FileIRs() (map[string]FileIR, error) {
+	rows, err := s.conn.Query(`SELECT path, content_hash, data FROM file_irs`)
+	if err != nil {
+		return nil, fmt.Errorf("read cached parses: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]FileIR{}
+	for rows.Next() {
+		var ir FileIR
+		if err := rows.Scan(&ir.Path, &ir.ContentHash, &ir.Data); err != nil {
+			return nil, fmt.Errorf("scan cached parse: %w", err)
+		}
+		out[ir.Path] = ir
+	}
+	return out, rows.Err()
+}
+
 // ConfidenceCounts returns how many edges carry each confidence level. This is
 // the raw material for the resolution-rate metric.
 func (s *Store) ConfidenceCounts() (map[Confidence]int, error) {
