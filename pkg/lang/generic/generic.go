@@ -364,8 +364,9 @@ func splitCallee(callee *sitter.Node, src []byte) (name, recv string) {
 const opaqueReceiver = "<expr>"
 
 func cleanReceiver(recv string) string {
-	recv = strings.TrimSpace(recv)
-	if strings.ContainsAny(recv, "(\n") {
+	// PHP writes variables as $name; "$this" is the resolver's "this".
+	recv = strings.TrimPrefix(strings.TrimSpace(recv), "$")
+	if strings.ContainsAny(recv, "({ \t\n") {
 		return opaqueReceiver
 	}
 	// A path such as "super::Cart" names the type by its last segment.
