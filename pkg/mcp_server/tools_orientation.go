@@ -36,56 +36,76 @@ func handleSearchSymbols(sess *session, projectPath string, args map[string]any)
 	kindFilter := store.NodeKind(argString(args, "kind"))
 	limit := argInt(args, "limit", 20)
 
+	// rank orders matches: an exact name first, then a name that starts with
+	// the query, then full-text hits in relevance order, then substrings.
+	// Lower is better.
+	queryLower := strings.ToLower(query)
+	type match struct {
+		node store.Node
+		rank int
+	}
 	seen := make(map[string]bool)
-	var matches []store.Node
-
-	hits, _ := sess.store.Search(query, limit*2)
-	for _, hit := range hits {
-		if node, ok := sess.graph.Nodes[hit.NodeID]; ok {
-			if kindFilter != "" && node.Kind != kindFilter {
-				continue
-			}
-			if !seen[node.ID] {
-				seen[node.ID] = true
-				matches = append(matches, node)
-			}
+	var matches []match
+	add := func(node store.Node, rank int) {
+		if seen[node.ID] || node.Kind == store.KindExternal {
+			return
 		}
+		if kindFilter != "" && node.Kind != kindFilter {
+			return
+		}
+		name := strings.ToLower(node.Name)
+		switch {
+		case name == queryLower || strings.ToLower(node.QualifiedName) == queryLower:
+			rank = 0
+		case strings.HasPrefix(name, queryLower):
+			rank = 1
+		}
+		seen[node.ID] = true
+		matches = append(matches, match{node, rank})
 	}
 
-	if len(matches) < limit {
-		queryLower := strings.ToLower(query)
-		for _, node := range sess.graph.Nodes {
-			if seen[node.ID] {
-				continue
-			}
-			if kindFilter != "" && node.Kind != kindFilter {
-				continue
-			}
-			if strings.Contains(strings.ToLower(node.Name), queryLower) ||
-				strings.Contains(strings.ToLower(node.QualifiedName), queryLower) {
-				seen[node.ID] = true
-				matches = append(matches, node)
-				if len(matches) >= limit {
-					break
-				}
-			}
+	hits, _ := sess.store.Search(query, limit*2)
+	for i, hit := range hits {
+		if node, ok := sess.graph.Nodes[hit.NodeID]; ok {
+			add(node, 2+i)
+		}
+	}
+	substringRank := 2 + len(hits)
+	for _, node := range sess.graph.Nodes {
+		if strings.Contains(strings.ToLower(node.Name), queryLower) ||
+			strings.Contains(strings.ToLower(node.QualifiedName), queryLower) {
+			add(node, substringRank)
 		}
 	}
 
 	sort.Slice(matches, func(i, j int) bool {
-		return matches[i].ID < matches[j].ID
+		a, b := matches[i], matches[j]
+		if a.rank != b.rank {
+			return a.rank < b.rank
+		}
+		// Code before the tests that exercise it.
+		if a.node.IsTest != b.node.IsTest {
+			return !a.node.IsTest
+		}
+		return a.node.ID < b.node.ID
 	})
 
+	total := len(matches)
 	if len(matches) > limit {
 		matches = matches[:limit]
+	}
+	views := make([]nodeView, len(matches))
+	for i, m := range matches {
+		views[i] = viewNode(m.node)
 	}
 
 	return toolJSON(Envelope{
 		Answer: map[string]any{
-			"matches": matches,
+			"matches": views,
 		},
 		Stats: map[string]any{
-			"count": len(matches),
+			"count":     len(views),
+			"truncated": total > len(views),
 		},
 	}), nil
 }
@@ -104,35 +124,22 @@ func handleGetContext(sess *session, projectPath string, args map[string]any) (*
 	radius := argInt(args, "radius", 1)
 	includeSource := argBool(args, "include_source")
 
-	collectNeighbors := func(edges []store.Edge, useSource bool, kind store.EdgeKind) []store.Node {
-		var list []store.Node
-		for _, e := range edges {
-			if e.Kind != kind {
-				continue
-			}
-			id := e.TargetID
-			if useSource {
-				id = e.SourceID
-			}
-			if n, ok := sess.graph.Nodes[id]; ok {
-				list = append(list, n)
-			}
-		}
-		sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
-		return list
-	}
-
+	in, out := sess.graph.In[node.ID], sess.graph.Out[node.ID]
 	answer := map[string]any{
-		"node":       node,
-		"callers":    collectNeighbors(sess.graph.In[node.ID], true, store.EdgeCalls),
-		"callees":    collectNeighbors(sess.graph.Out[node.ID], false, store.EdgeCalls),
-		"bases":      collectNeighbors(sess.graph.Out[node.ID], false, store.EdgeInherits),
-		"subclasses": collectNeighbors(sess.graph.In[node.ID], true, store.EdgeInherits),
+		"node":       viewNode(node),
+		"callers":    neighbours(in, true, store.EdgeCalls),
+		"callees":    neighbours(out, false, store.EdgeCalls),
+		"bases":      neighbours(out, false, store.EdgeInherits),
+		"subclasses": neighbours(in, true, store.EdgeInherits),
 	}
 
 	if radius > 1 {
 		subgraph := sess.graph.Neighborhood(node.ID, radius, 100)
-		answer["subgraph"] = subgraph
+		answer["subgraph"] = map[string]any{
+			"nodes":     viewNodes(subgraph.Nodes),
+			"edges":     viewEdges(subgraph.Edges),
+			"truncated": subgraph.Truncated,
+		}
 	}
 
 	if includeSource {

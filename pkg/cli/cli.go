@@ -3,7 +3,9 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -134,6 +136,12 @@ func runTool(args []string, stdout, stderr io.Writer) int {
 	if toolErr {
 		fmt.Fprintln(stderr, text)
 		return 1
+	}
+	// Tools answer in compact JSON to save an agent's context. A person at a
+	// terminal reads it better indented.
+	var pretty bytes.Buffer
+	if json.Indent(&pretty, []byte(text), "", "  ") == nil {
+		text = pretty.String()
 	}
 	fmt.Fprintln(stdout, text)
 	return 0

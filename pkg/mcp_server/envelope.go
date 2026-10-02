@@ -14,7 +14,8 @@ type Envelope struct {
 }
 
 func toolJSON(e Envelope) *mcp.CallToolResult {
-	b, err := json.MarshalIndent(e, "", "  ")
+	// Compact on purpose: indentation is whitespace the model pays for.
+	b, err := json.Marshal(e)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error())
 	}
