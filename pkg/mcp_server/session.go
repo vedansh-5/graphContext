@@ -13,6 +13,7 @@ import (
 	"github.com/vedansh-5/graphcontext/pkg/analysis"
 	"github.com/vedansh-5/graphcontext/pkg/daemon"
 	"github.com/vedansh-5/graphcontext/pkg/indexer"
+	_ "github.com/vedansh-5/graphcontext/pkg/lang/generic"
 	_ "github.com/vedansh-5/graphcontext/pkg/lang/golang"
 	_ "github.com/vedansh-5/graphcontext/pkg/lang/python"
 	_ "github.com/vedansh-5/graphcontext/pkg/lang/typescript"
