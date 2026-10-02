@@ -397,3 +397,46 @@ func TestSearchReindexReplacesTokens(t *testing.T) {
 		t.Errorf("want 1 hit after recommit, got %+v", hits)
 	}
 }
+
+func TestBatchTargetedDeletes(t *testing.T) {
+	s := newTestStore(t)
+
+	b := NewBatch()
+	b.TouchFile(FileRecord{Path: "a.go", ContentHash: "h1", IndexedAt: time.Now()})
+	b.AddNode(fn("a.go:keep", "keep", "a.keep", "a.go"))
+	b.AddNode(fn("a.go:drop", "drop", "a.drop", "a.go"))
+	b.AddNode(fn("a.go:other", "other", "a.other", "a.go"))
+	keepDrop := Edge{SourceID: "a.go:keep", TargetID: "a.go:drop", Kind: EdgeCalls, Line: 1, Confidence: ConfExact}
+	keepOther := Edge{SourceID: "a.go:keep", TargetID: "a.go:other", Kind: EdgeCalls, Line: 2, Confidence: ConfExact}
+	otherKeep := Edge{SourceID: "a.go:other", TargetID: "a.go:keep", Kind: EdgeCalls, Line: 3, Confidence: ConfExact}
+	b.AddEdge(keepDrop)
+	b.AddEdge(keepOther)
+	b.AddEdge(otherKeep)
+	if err := s.Commit(b); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	d := NewBatch()
+	d.RecordFile(FileRecord{Path: "a.go", ContentHash: "h2", IndexedAt: time.Now()})
+	d.DeleteNode("a.go:drop")
+	d.DeleteEdge(keepOther)
+	if err := s.Commit(d); err != nil {
+		t.Fatalf("commit deletes: %v", err)
+	}
+
+	nodes, _ := s.AllNodes()
+	if len(nodes) != 2 {
+		t.Errorf("want 2 nodes left, got %+v", nodes)
+	}
+	// keep->drop went with its node, keep->other was deleted directly.
+	edges, _ := s.AllEdges()
+	if len(edges) != 1 || edges[0].SourceID != "a.go:other" {
+		t.Errorf("want only other->keep left, got %+v", edges)
+	}
+	if hits, _ := s.Search("drop", 10); len(hits) != 0 {
+		t.Errorf("deleted node still searchable: %+v", hits)
+	}
+	if h, _ := s.FileHashes(); h["a.go"] != "h2" {
+		t.Errorf("file hash = %q, want h2", h["a.go"])
+	}
+}

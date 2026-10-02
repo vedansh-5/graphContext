@@ -15,6 +15,11 @@ type Batch struct {
 	touched []FileRecord
 	// removed files are gone from disk: purge nodes and forget the file record.
 	removed []string
+	// recorded files only have their file record updated; their nodes are left
+	// alone because the caller queues exactly the node and edge changes needed.
+	recorded     []FileRecord
+	deletedNodes []string
+	deletedEdges []Edge
 }
 
 // NewBatch returns an empty batch.
@@ -34,12 +39,22 @@ func (b *Batch) TouchFile(f FileRecord) { b.touched = append(b.touched, f) }
 // RemoveFile marks a file as deleted from disk.
 func (b *Batch) RemoveFile(path string) { b.removed = append(b.removed, path) }
 
+// RecordFile updates a file's record without purging its nodes. Use it with
+// DeleteNode and DeleteEdge when the batch carries a precise diff.
+func (b *Batch) RecordFile(f FileRecord) { b.recorded = append(b.recorded, f) }
+
+// DeleteNode queues the removal of one node. Its edges go with it.
+func (b *Batch) DeleteNode(id string) { b.deletedNodes = append(b.deletedNodes, id) }
+
+// DeleteEdge queues the removal of one edge, identified by its primary key.
+func (b *Batch) DeleteEdge(e Edge) { b.deletedEdges = append(b.deletedEdges, e) }
+
 // Len reports how many nodes and edges are queued.
 func (b *Batch) Len() (nodes, edges int) { return len(b.nodes), len(b.edges) }
 
 // Commit writes the whole batch in one transaction.
 //
-// Order matters: purges run first, then every node, then every edge. Edges carry
+// Order matters: deletes and purges run first, then every node, then every edge. Edges carry
 // foreign keys onto nodes, so all nodes in the batch must exist before any edge
 // references them.
 func (s *Store) Commit(b *Batch) error {
@@ -49,6 +64,12 @@ func (s *Store) Commit(b *Batch) error {
 	}
 	defer tx.Rollback()
 
+	if err := deleteEdges(tx, b.deletedEdges); err != nil {
+		return err
+	}
+	if err := deleteNodes(tx, b.deletedNodes); err != nil {
+		return err
+	}
 	for _, f := range b.touched {
 		if err := purgeFile(tx, f.Path); err != nil {
 			return err
@@ -79,9 +100,11 @@ func (s *Store) Commit(b *Batch) error {
 		return fmt.Errorf("prepare file insert: %w", err)
 	}
 	defer fileStmt.Close()
-	for _, f := range b.touched {
-		if _, err := fileStmt.Exec(f.Path, f.ContentHash, f.IndexedAt.Unix()); err != nil {
-			return fmt.Errorf("insert file %s: %w", f.Path, err)
+	for _, files := range [][]FileRecord{b.touched, b.recorded} {
+		for _, f := range files {
+			if _, err := fileStmt.Exec(f.Path, f.ContentHash, f.IndexedAt.Unix()); err != nil {
+				return fmt.Errorf("insert file %s: %w", f.Path, err)
+			}
 		}
 	}
 
@@ -105,6 +128,53 @@ func purgeFile(tx *sql.Tx, path string) error {
 	}
 	if _, err := tx.Exec(`DELETE FROM nodes WHERE file_path = ?`, path); err != nil {
 		return fmt.Errorf("purge nodes for %s: %w", path, err)
+	}
+	return nil
+}
+
+func deleteNodes(tx *sql.Tx, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	ftsDel, err := tx.Prepare(
+		`DELETE FROM symbols_fts WHERE rowid = (SELECT rowid FROM nodes WHERE id = ?)`)
+	if err != nil {
+		return fmt.Errorf("prepare fts delete: %w", err)
+	}
+	defer ftsDel.Close()
+
+	nodeDel, err := tx.Prepare(`DELETE FROM nodes WHERE id = ?`)
+	if err != nil {
+		return fmt.Errorf("prepare node delete: %w", err)
+	}
+	defer nodeDel.Close()
+
+	for _, id := range ids {
+		if _, err := ftsDel.Exec(id); err != nil {
+			return fmt.Errorf("clear fts for %s: %w", id, err)
+		}
+		if _, err := nodeDel.Exec(id); err != nil {
+			return fmt.Errorf("delete node %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
+func deleteEdges(tx *sql.Tx, edges []Edge) error {
+	if len(edges) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(
+		`DELETE FROM edges WHERE source_id = ? AND target_id = ? AND kind = ? AND line = ?`)
+	if err != nil {
+		return fmt.Errorf("prepare edge delete: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, e := range edges {
+		if _, err := stmt.Exec(e.SourceID, e.TargetID, string(e.Kind), e.Line); err != nil {
+			return fmt.Errorf("delete edge %s->%s: %w", e.SourceID, e.TargetID, err)
+		}
 	}
 	return nil
 }
