@@ -38,6 +38,10 @@ func (idx *index) resolveReceiverType(scopeID, receiver string) string {
 			filePath := scopeFilePath(scopeID)
 			if t, ok := idx.varTypes[lang.VarKey(filePath, first)]; ok && t != "" {
 				currentType = t
+			} else if _, ok := idx.typeMethods[first]; ok {
+				// Not a variable but the name of a type: a static call such
+				// as Cart::new() or Helper.setup().
+				currentType = first
 			}
 		}
 	}

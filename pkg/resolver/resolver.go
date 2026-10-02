@@ -25,7 +25,7 @@ type ResolutionResult struct {
 
 // Version identifies the resolver's behaviour. Bump it whenever the same parsed
 // files would resolve to a different graph, so stored graphs are rebuilt.
-const Version = 2
+const Version = 3
 
 // Resolve turns the parsed files into nodes and edges.
 //
