@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vedansh-5/graphcontext/pkg/analysis"
@@ -29,6 +30,10 @@ type Daemon struct {
 	listenersMu sync.Mutex
 	done        chan struct{}
 	closed      sync.Once
+	// syncedSeq is the watcher sequence the current graph was built at.
+	syncedSeq atomic.Uint64
+	// synced is set once the first sync has succeeded.
+	synced atomic.Bool
 }
 
 func New(cfg Config) (*Daemon, error) {
@@ -132,6 +137,33 @@ func (d *Daemon) Graph() *analysis.Graph {
 	return d.graph
 }
 
+// FreshGraph returns a graph that reflects the files on disk right now.
+//
+// While the watcher is running and has seen no change since the last sync, the
+// current graph is returned without touching the disk. Otherwise the repo is
+// re-checked first, so a caller never reads a graph older than an edit that
+// the debounced background sync has not reached yet.
+func (d *Daemon) FreshGraph() (*analysis.Graph, error) {
+	if !d.upToDate() {
+		if _, err := d.SyncNow(); err != nil {
+			return nil, err
+		}
+	}
+	g := d.Graph()
+	if g == nil {
+		return nil, fmt.Errorf("daemon: graph not initialized")
+	}
+	return g, nil
+}
+
+func (d *Daemon) upToDate() bool {
+	d.mu.RLock()
+	watching := d.status.IsWatching
+	d.mu.RUnlock()
+	return watching && d.synced.Load() && d.watcher.Healthy() &&
+		d.watcher.Seq() == d.syncedSeq.Load()
+}
+
 func (d *Daemon) WithGraph(fn func(g *analysis.Graph) error) error {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -208,6 +240,9 @@ func (d *Daemon) syncInternal(batch *watcher.EventBatch) (bool, error) {
 	defer d.syncMu.Unlock()
 
 	start := time.Now()
+	// Read the sequence before indexing: an event that lands mid-sync must
+	// leave the graph marked stale.
+	seq := d.watcher.Seq()
 	changed, err := indexer.EnsureFresh(d.repoRoot, d.store)
 	if err != nil {
 		d.mu.Lock()
@@ -257,6 +292,8 @@ func (d *Daemon) syncInternal(batch *watcher.EventBatch) (bool, error) {
 	d.status.NodeCount = d.graph.NodeCount()
 	d.status.EdgeCount = d.graph.EdgeCount()
 	d.status.LastError = ""
+	d.syncedSeq.Store(seq)
+	d.synced.Store(true)
 	nodeCount := d.status.NodeCount
 	edgeCount := d.status.EdgeCount
 	d.mu.Unlock()
