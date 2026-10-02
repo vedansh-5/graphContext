@@ -109,9 +109,9 @@ func EnsureFresh(repoRoot string, s *store.Store) (bool, error) {
 	}
 	wg.Wait()
 
-	// A different IR version means the plugins now extract something else, so
-	// the stored graph is out of date even if no file changed.
-	irVersion := fmt.Sprint(lang.IRVersion)
+	// A different plugin or resolver version means the same files now produce
+	// a different graph, so the stored one is out of date even if no file changed.
+	irVersion := fmt.Sprintf("%d.%d", lang.IRVersion, resolver.Version)
 	storedVersion, err := s.Meta(irVersionKey)
 	if err != nil {
 		return false, fmt.Errorf("read ir version: %w", err)

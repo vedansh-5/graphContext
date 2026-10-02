@@ -367,3 +367,56 @@ func TestResolveDeterminism(t *testing.T) {
 		t.Errorf("two Resolve calls produced different results")
 	}
 }
+
+// A name is only resolved against declarations in the same language.
+func TestResolveDoesNotCrossLanguages(t *testing.T) {
+	fn := func(path, name, language string) store.Node {
+		return store.Node{ID: path + ":" + name, Kind: store.KindFunction, Name: name,
+			QualifiedName: name, FilePath: path, Language: language}
+	}
+	files := []*lang.FileIR{
+		{
+			Path: "app.py", Language: "python", Types: lang.NewTypeFacts(),
+			Nodes: []store.Node{fn("app.py", "run", "python")},
+			Refs: []lang.Ref{
+				{Kind: store.EdgeCalls, Name: "save", FromID: "app.py:run", Line: 2},
+				{Kind: store.EdgeCalls, Name: "flush", FromID: "app.py:run", Line: 3},
+			},
+		},
+		{
+			Path: "db.py", Language: "python", Types: lang.NewTypeFacts(),
+			Nodes: []store.Node{fn("db.py", "save", "python")},
+		},
+		{
+			Path: "db.go", Language: "go", Types: lang.NewTypeFacts(),
+			Nodes: []store.Node{fn("db.go", "save", "go"), fn("db.go", "flush", "go")},
+		},
+	}
+
+	res, err := Resolve("", files)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	targets := map[string]store.Edge{}
+	for _, e := range res.Edges {
+		if e.SourceID == "app.py:run" {
+			targets[e.TargetID] = e
+		}
+	}
+	if e, ok := targets["db.py:save"]; !ok || e.Confidence != store.ConfNameMatch {
+		t.Errorf("save() should resolve to the one Python save, got %+v", targets)
+	}
+	if _, ok := targets["db.go:save"]; ok {
+		t.Error("Python call linked to a Go function of the same name")
+	}
+	if _, ok := targets["db.go:flush"]; ok {
+		t.Error("flush() exists only in Go and must stay unresolved for Python")
+	}
+	if e, ok := targets["external:flush"]; !ok || e.Confidence != store.ConfUnknown {
+		t.Errorf("flush() should be an unknown external, got %+v", targets)
+	}
+	if len(res.Nodes) != 5 {
+		t.Errorf("want 4 declared nodes + 1 external, got %d", len(res.Nodes))
+	}
+}

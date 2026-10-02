@@ -23,10 +23,18 @@ type ResolutionResult struct {
 	Stats ResolutionStats
 }
 
-func Resolve(repoRoot string, files []*lang.FileIR) (*ResolutionResult, error) {
-	idx := buildIndex(repoRoot, files)
+// Version identifies the resolver's behaviour. Bump it whenever the same parsed
+// files would resolve to a different graph, so stored graphs are rebuilt.
+const Version = 2
 
+// Resolve turns the parsed files into nodes and edges.
+//
+// Files are resolved one language family at a time. Names only ever match
+// declarations in the same family, so a Python call to save() is never linked
+// to a Go function that happens to share the name.
+func Resolve(repoRoot string, files []*lang.FileIR) (*ResolutionResult, error) {
 	var edges []store.Edge
+	var allNodes []store.Node
 	var extNodes []store.Node
 	seenExt := make(map[string]bool)
 
@@ -47,6 +55,72 @@ func Resolve(repoRoot string, files []*lang.FileIR) (*ResolutionResult, error) {
 	}
 
 	stats := ResolutionStats{}
+
+	groups := make(map[string][]*lang.FileIR)
+	var families []string
+	for _, f := range files {
+		fam := lang.Family(f.Language)
+		if _, ok := groups[fam]; !ok {
+			families = append(families, fam)
+		}
+		groups[fam] = append(groups[fam], f)
+	}
+	sort.Strings(families)
+
+	for _, fam := range families {
+		nodes, famEdges := resolveFamily(repoRoot, groups[fam], extNode, &stats)
+		allNodes = append(allNodes, nodes...)
+		edges = append(edges, famEdges...)
+	}
+
+	if stats.TotalRefs > 0 {
+		stats.ResolutionRate = float64(stats.Exact+stats.NameMatch) / float64(stats.TotalRefs) * 100
+	}
+
+	allNodes = append(allNodes, extNodes...)
+	sort.SliceStable(allNodes, func(i, j int) bool {
+		if allNodes[i].FilePath != allNodes[j].FilePath {
+			return allNodes[i].FilePath < allNodes[j].FilePath
+		}
+		if allNodes[i].StartByte != allNodes[j].StartByte {
+			return allNodes[i].StartByte < allNodes[j].StartByte
+		}
+		return allNodes[i].ID < allNodes[j].ID
+	})
+
+	edgeMap := make(map[string]store.Edge)
+	for _, e := range edges {
+		k := fmt.Sprintf("%s|%s|%s|%d", e.SourceID, e.TargetID, e.Kind, e.Line)
+		edgeMap[k] = e
+	}
+	var dedupEdges []store.Edge
+	for _, e := range edgeMap {
+		dedupEdges = append(dedupEdges, e)
+	}
+	sort.SliceStable(dedupEdges, func(i, j int) bool {
+		if dedupEdges[i].SourceID != dedupEdges[j].SourceID {
+			return dedupEdges[i].SourceID < dedupEdges[j].SourceID
+		}
+		if dedupEdges[i].TargetID != dedupEdges[j].TargetID {
+			return dedupEdges[i].TargetID < dedupEdges[j].TargetID
+		}
+		if dedupEdges[i].Kind != dedupEdges[j].Kind {
+			return dedupEdges[i].Kind < dedupEdges[j].Kind
+		}
+		return dedupEdges[i].Line < dedupEdges[j].Line
+	})
+
+	return &ResolutionResult{
+		Nodes: allNodes,
+		Edges: dedupEdges,
+		Stats: stats,
+	}, nil
+}
+
+// resolveFamily resolves the files of one language family against each other.
+func resolveFamily(repoRoot string, files []*lang.FileIR, extNode func(string) string, stats *ResolutionStats) ([]store.Node, []store.Edge) {
+	idx := buildIndex(repoRoot, files)
+	var edges []store.Edge
 
 	for _, f := range files {
 		for _, ref := range f.Refs {
@@ -316,46 +390,5 @@ func Resolve(repoRoot string, files []*lang.FileIR) (*ResolutionResult, error) {
 		}
 	}
 
-	if stats.TotalRefs > 0 {
-		stats.ResolutionRate = float64(stats.Exact+stats.NameMatch) / float64(stats.TotalRefs) * 100
-	}
-
-	allNodes := append(idx.nodes, extNodes...)
-	sort.SliceStable(allNodes, func(i, j int) bool {
-		if allNodes[i].FilePath != allNodes[j].FilePath {
-			return allNodes[i].FilePath < allNodes[j].FilePath
-		}
-		if allNodes[i].StartByte != allNodes[j].StartByte {
-			return allNodes[i].StartByte < allNodes[j].StartByte
-		}
-		return allNodes[i].ID < allNodes[j].ID
-	})
-
-	edgeMap := make(map[string]store.Edge)
-	for _, e := range edges {
-		k := fmt.Sprintf("%s|%s|%s|%d", e.SourceID, e.TargetID, e.Kind, e.Line)
-		edgeMap[k] = e
-	}
-	var dedupEdges []store.Edge
-	for _, e := range edgeMap {
-		dedupEdges = append(dedupEdges, e)
-	}
-	sort.SliceStable(dedupEdges, func(i, j int) bool {
-		if dedupEdges[i].SourceID != dedupEdges[j].SourceID {
-			return dedupEdges[i].SourceID < dedupEdges[j].SourceID
-		}
-		if dedupEdges[i].TargetID != dedupEdges[j].TargetID {
-			return dedupEdges[i].TargetID < dedupEdges[j].TargetID
-		}
-		if dedupEdges[i].Kind != dedupEdges[j].Kind {
-			return dedupEdges[i].Kind < dedupEdges[j].Kind
-		}
-		return dedupEdges[i].Line < dedupEdges[j].Line
-	})
-
-	return &ResolutionResult{
-		Nodes: allNodes,
-		Edges: dedupEdges,
-		Stats: stats,
-	}, nil
+	return idx.nodes, edges
 }
