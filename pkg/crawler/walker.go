@@ -3,17 +3,33 @@ package crawler
 import (
 	"io/fs"
 	"path/filepath"
-	"strings"
+
+	"github.com/vedansh-5/graphcontext/pkg/lang"
 )
 
-// IgnoreDirs contains common directories we want to skip to save time and memory
+// IgnoreDirs are directory names skipped everywhere: by the crawler when
+// indexing and by the watcher when listening for changes. Both must agree, or
+// a file could be indexed but never refreshed.
 var IgnoreDirs = map[string]bool{
 	".git":         true,
+	".github":      true,
+	".idea":        true,
+	".vscode":      true,
+	".cache":       true,
+	".venv":        true,
+	"venv":         true,
 	"node_modules": true,
 	"vendor":       true,
 	"dist":         true,
 	"build":        true,
-	".venv":        true,
+	"coverage":     true,
+	"__pycache__":  true,
+}
+
+// IsSourceFile reports whether a registered language plugin claims the file.
+func IsSourceFile(path string) bool {
+	_, ok := lang.For(path)
+	return ok
 }
 
 // Walk finds all source files in the rootDir and sends them to the filesChannel.
@@ -36,9 +52,8 @@ func Walk(rootDir string, filesChan chan<- string) {
 				}
 				return nil
 			}
-			// We filter but extensions
-			ext := strings.ToLower(filepath.Ext(path))
-			if ext == ".py" || ext == ".go" || ext == ".js" || ext == ".ts" {
+			// Only files a language plugin can parse are worth emitting.
+			if IsSourceFile(path) {
 				// send the discovered file path into our pipeline
 				// this blocks if the channel is full, creating natural backpressure.
 				filesChan <- path

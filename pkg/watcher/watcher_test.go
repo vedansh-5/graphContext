@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	_ "github.com/vedansh-5/graphcontext/pkg/lang/golang"
+	_ "github.com/vedansh-5/graphcontext/pkg/lang/python"
+	_ "github.com/vedansh-5/graphcontext/pkg/lang/typescript"
 )
 
 func TestDebounceCoalesceOperations(t *testing.T) {
