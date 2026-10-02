@@ -4,7 +4,7 @@ import "fmt"
 
 // SchemaVersion is bumped whenever the DDL below changes in a way that makes
 // an existing database unreadable. Open() wipes and rebuilds on mismatch.
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS nodes (
@@ -55,6 +55,8 @@ CREATE INDEX IF NOT EXISTS idx_nodes_name  ON nodes(name);
 CREATE INDEX IF NOT EXISTS idx_edges_src   ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_tgt   ON edges(target_id);
 
+-- Each row's rowid equals the rowid of the node it indexes, so rows can be
+-- replaced or purged by rowid instead of scanning for node_id.
 CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
 	node_id UNINDEXED,
 	tokens,

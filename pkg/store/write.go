@@ -93,10 +93,14 @@ func (s *Store) Commit(b *Batch) error {
 
 // purgeFile removes every node owned by a path, along with its FTS rows.
 // Edges vanish through ON DELETE CASCADE.
+//
+// FTS rows share their rowid with the node they index, so the delete is a
+// rowid lookup. Matching on the unindexed node_id column instead scans the
+// whole FTS table once per call.
 func purgeFile(tx *sql.Tx, path string) error {
 	if _, err := tx.Exec(
-		`DELETE FROM symbols_fts WHERE node_id IN
-		   (SELECT id FROM nodes WHERE file_path = ?)`, path); err != nil {
+		`DELETE FROM symbols_fts WHERE rowid IN
+		   (SELECT rowid FROM nodes WHERE file_path = ?)`, path); err != nil {
 		return fmt.Errorf("purge fts for %s: %w", path, err)
 	}
 	if _, err := tx.Exec(`DELETE FROM nodes WHERE file_path = ?`, path); err != nil {
@@ -128,14 +132,16 @@ func insertNodes(tx *sql.Tx, nodes []Node) error {
 	}
 	defer stmt.Close()
 
-	ftsDel, err := tx.Prepare(`DELETE FROM symbols_fts WHERE node_id = ?`)
+	ftsDel, err := tx.Prepare(
+		`DELETE FROM symbols_fts WHERE rowid = (SELECT rowid FROM nodes WHERE id = ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare fts delete: %w", err)
 	}
 	defer ftsDel.Close()
 
 	ftsIns, err := tx.Prepare(
-		`INSERT INTO symbols_fts(node_id, tokens, docstring) VALUES(?,?,?)`)
+		`INSERT INTO symbols_fts(rowid, node_id, tokens, docstring)
+		 SELECT rowid, id, ?, ? FROM nodes WHERE id = ?`)
 	if err != nil {
 		return fmt.Errorf("prepare fts insert: %w", err)
 	}
@@ -156,7 +162,7 @@ func insertNodes(tx *sql.Tx, nodes []Node) error {
 		if _, err := ftsDel.Exec(n.ID); err != nil {
 			return fmt.Errorf("clear fts for %s: %w", n.ID, err)
 		}
-		if _, err := ftsIns.Exec(n.ID, ftsTokens(n), n.Docstring); err != nil {
+		if _, err := ftsIns.Exec(ftsTokens(n), n.Docstring, n.ID); err != nil {
 			return fmt.Errorf("index fts for %s: %w", n.ID, err)
 		}
 	}
