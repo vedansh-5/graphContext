@@ -37,6 +37,8 @@ type session struct {
 var (
 	sessions   = make(map[string]*session)
 	sessionsMu sync.Mutex
+	// liveEnabled is guarded by sessionsMu. See SetLive.
+	liveEnabled = true
 )
 
 // getSession returns the up-to-date session for a project, opening it on first
@@ -85,7 +87,9 @@ func openSession(projectPath string, hold bool) (*session, error) {
 			store:    st,
 			repoRoot: absPath,
 		}
-		sess.live = startLive(absPath, st)
+		if liveEnabled {
+			sess.live = startLive(absPath, st)
+		}
 		sessions[absPath] = sess
 	}
 

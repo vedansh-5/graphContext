@@ -1,14 +1,11 @@
 package main
 
 import (
-	"log"
+	"os"
 
-	"github.com/vedansh-5/graphcontext/pkg/mcp_server"
+	"github.com/vedansh-5/graphcontext/pkg/cli"
 )
 
 func main() {
-	// launch MCP
-	if err := mcp_server.StartStdioServer(); err != nil {
-		log.Fatalf("MCP Server crashed: %v", err)
-	}
+	os.Exit(cli.Main(os.Args[1:], os.Stdout, os.Stderr))
 }

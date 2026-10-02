@@ -41,7 +41,7 @@ go build -o graphcontext main.go
 
 ### Connect to an MCP client
 
-The server speaks JSON-RPC over stdio and takes no CLI flags — each tool receives an absolute `project_path`, so one server instance can serve many repositories.
+Run with no arguments, the binary is an MCP server speaking JSON-RPC over stdio. Each tool receives an absolute `project_path`, so one server instance can serve many repositories.
 
 **Claude Code:**
 
@@ -64,6 +64,21 @@ claude mcp add graphcontext -- /absolute/path/to/graphcontext
 On the first tool call against a repository, the indexer performs a full three-pass parse. Subsequent calls hash file contents and re-parse only what changed.
 
 Indexes live in `~/.cache/graphcontext/<repo_hash>/graph.db`, never inside the analyzed repository.
+
+### Use from the command line
+
+The same tools are available without an MCP client, for scripts and CI:
+
+```bash
+graphcontext tools                                   # list tools and their arguments
+graphcontext run search_symbols query=login          # run a tool on the current directory
+graphcontext run diff_impact git_ref=main...HEAD     # symbols and tests affected by a branch
+graphcontext run impact_of_change -C ~/code/app symbol=AuthService.login
+graphcontext index [dir]                             # index a project and print a summary
+graphcontext watch [dir]                             # keep the index up to date as files change
+```
+
+`run` prints the tool's JSON answer on stdout. It exits 1 if the tool reports an error and 2 on a usage error.
 
 ---
 
