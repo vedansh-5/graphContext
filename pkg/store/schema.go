@@ -4,7 +4,7 @@ import "fmt"
 
 // SchemaVersion is bumped whenever the DDL below changes in a way that makes
 // an existing database unreadable. Open() wipes and rebuilds on mismatch.
-const SchemaVersion = 4
+const SchemaVersion = 5
 
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS nodes (
@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS edges (
 CREATE TABLE IF NOT EXISTS files (
 	path         TEXT PRIMARY KEY,
 	content_hash TEXT NOT NULL,
-	indexed_at   INTEGER NOT NULL
+	indexed_at   INTEGER NOT NULL,
+	size         INTEGER NOT NULL DEFAULT 0,
+	mtime_ns     INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS meta (

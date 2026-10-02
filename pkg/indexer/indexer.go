@@ -15,27 +15,53 @@ import (
 	"github.com/vedansh-5/graphcontext/pkg/store"
 )
 
+// statUnchanged reports whether a file's stat proves it has not changed since
+// it was recorded, so it need not be read.
+//
+// A matching size and mtime is only trusted when the file was last modified
+// before the second it was indexed in. A file written in that same second
+// could be edited again without its mtime moving, so it is re-hashed instead.
+func statUnchanged(rec store.FileRecord, info os.FileInfo) bool {
+	mtime := info.ModTime().UnixNano()
+	return rec.ContentHash != "" &&
+		rec.Size == info.Size() &&
+		rec.ModTimeNs == mtime &&
+		mtime < rec.IndexedAt.Unix()*int64(time.Second)
+}
+
+func hashOf(src []byte) string {
+	sum := sha256.Sum256(src)
+	return hex.EncodeToString(sum[:])
+}
+
 func EnsureFresh(repoRoot string, s *store.Store) (bool, error) {
-	stored, err := s.FileHashes()
+	stored, err := s.FileRecords()
 	if err != nil {
-		return false, fmt.Errorf("read file hashes: %w", err)
+		return false, fmt.Errorf("read file records: %w", err)
 	}
 
 	filesChan := make(chan string, 100)
 	crawler.Walk(repoRoot, filesChan)
 
+	// fileData describes one source file on disk. src is nil when the file's
+	// stat matched its record and it has not been read yet.
 	type fileData struct {
-		path string
-		rel  string
-		hash string
-		src  []byte
+		path    string
+		rel     string
+		hash    string
+		src     []byte
+		size    int64
+		mtimeNs int64
+		// restat marks a file whose content is unchanged but whose record
+		// carries a stale stat and should be refreshed.
+		restat bool
+		dirty  bool
 	}
 
 	var (
-		mu      sync.Mutex
-		seen    = make(map[string]bool)
-		changed = false
-		toParse []fileData
+		mu    sync.Mutex
+		seen  = make(map[string]bool)
+		files []fileData
 	)
 
 	var wg sync.WaitGroup
@@ -53,24 +79,42 @@ func EnsureFresh(repoRoot string, s *store.Store) (bool, error) {
 					continue
 				}
 
-				src, err := os.ReadFile(p)
+				info, err := os.Stat(p)
 				if err != nil {
 					continue
 				}
-				sum := sha256.Sum256(src)
-				h := hex.EncodeToString(sum[:])
+				fd := fileData{path: p, rel: rel, size: info.Size(), mtimeNs: info.ModTime().UnixNano()}
+
+				rec, known := stored[rel]
+				if known && statUnchanged(rec, info) {
+					fd.hash = rec.ContentHash
+				} else {
+					src, err := os.ReadFile(p)
+					if err != nil {
+						continue
+					}
+					fd.src = src
+					fd.hash = hashOf(src)
+					fd.dirty = !known || rec.ContentHash != fd.hash
+					fd.restat = !fd.dirty
+				}
 
 				mu.Lock()
 				seen[rel] = true
-				if stored[rel] != h {
-					changed = true
-				}
-				toParse = append(toParse, fileData{path: p, rel: rel, hash: h, src: src})
+				files = append(files, fd)
 				mu.Unlock()
 			}
 		}()
 	}
 	wg.Wait()
+
+	changed := false
+	for _, fd := range files {
+		if fd.dirty {
+			changed = true
+			break
+		}
+	}
 
 	var deleted []string
 	for oldRel := range stored {
@@ -80,26 +124,57 @@ func EnsureFresh(repoRoot string, s *store.Store) (bool, error) {
 		}
 	}
 
+	batch := store.NewBatch()
+	now := time.Now().UTC()
+	recorded := 0
+	for _, fd := range files {
+		if fd.dirty || fd.restat {
+			recorded++
+			batch.RecordFile(store.FileRecord{
+				Path:        fd.rel,
+				ContentHash: fd.hash,
+				IndexedAt:   now,
+				Size:        fd.size,
+				ModTimeNs:   fd.mtimeNs,
+			})
+		}
+	}
+
 	if !changed {
+		// Nothing to re-index, but remember fresh stats so these files can be
+		// skipped without hashing next time.
+		if recorded > 0 {
+			if err := s.Commit(batch); err != nil {
+				return false, fmt.Errorf("commit file records: %w", err)
+			}
+		}
 		return false, nil
 	}
 
 	var (
 		parseWg   sync.WaitGroup
-		fileIRs   = make([]*lang.FileIR, len(toParse))
-		parseErrs = make([]error, len(toParse))
+		fileIRs   = make([]*lang.FileIR, len(files))
+		parseErrs = make([]error, len(files))
 	)
 
-	for i := range toParse {
+	for i := range files {
 		parseWg.Add(1)
 		go func(idx int) {
 			defer parseWg.Done()
-			fd := toParse[idx]
+			fd := files[idx]
 			plugin, ok := lang.For(fd.rel)
 			if !ok {
 				return
 			}
-			ir, err := plugin.Parse(fd.rel, fd.src)
+			src := fd.src
+			if src == nil {
+				var err error
+				if src, err = os.ReadFile(fd.path); err != nil {
+					parseErrs[idx] = err
+					return
+				}
+			}
+			ir, err := plugin.Parse(fd.rel, src)
 			if err != nil {
 				parseErrs[idx] = err
 				return
@@ -121,20 +196,6 @@ func EnsureFresh(repoRoot string, s *store.Store) (bool, error) {
 		return false, fmt.Errorf("resolve: %w", err)
 	}
 
-	batch := store.NewBatch()
-	now := time.Now().UTC()
-
-	// Only files whose content changed need a new record; only nodes and edges
-	// that differ from what is stored need writing.
-	for _, fd := range toParse {
-		if stored[fd.rel] != fd.hash {
-			batch.RecordFile(store.FileRecord{
-				Path:        fd.rel,
-				ContentHash: fd.hash,
-				IndexedAt:   now,
-			})
-		}
-	}
 	for _, d := range deleted {
 		batch.RemoveFile(d)
 	}

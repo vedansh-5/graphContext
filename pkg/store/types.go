@@ -96,8 +96,12 @@ type Edge struct {
 }
 
 // FileRecord tracks a file's content hash so re-indexing can skip unchanged files.
+// Size and ModTimeNs are the file's stat at the time it was hashed; when they
+// still match, the indexer can skip reading the file at all.
 type FileRecord struct {
 	Path        string
 	ContentHash string
 	IndexedAt   time.Time
+	Size        int64
+	ModTimeNs   int64
 }

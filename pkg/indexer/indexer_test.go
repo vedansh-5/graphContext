@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	_ "github.com/vedansh-5/graphcontext/pkg/lang/golang"
 	_ "github.com/vedansh-5/graphcontext/pkg/lang/python"
@@ -227,5 +228,91 @@ func TestQueueGraphDiffIsMinimal(t *testing.T) {
 	}
 	if n, e := batch.Len(); n != 0 || e != 0 {
 		t.Errorf("unchanged graph queued %d nodes and %d edges, want 0", n, e)
+	}
+}
+
+func TestEnsureFreshStatSkip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.go")
+	past := time.Now().Add(-time.Hour)
+	write := func(src string, mtime time.Time) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names := func(s *store.Store) map[string]bool {
+		t.Helper()
+		nodes, err := s.AllNodes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]bool{}
+		for _, n := range nodes {
+			out[n.Name] = true
+		}
+		return out
+	}
+
+	s := benchStore(t)
+	write("package a\n\nfunc One() {}\n", past)
+	if changed, err := EnsureFresh(dir, s); err != nil || !changed {
+		t.Fatalf("initial index: changed=%v err=%v", changed, err)
+	}
+
+	// Same size, same mtime: the stat matches, so the file is not read. This
+	// is the trade-off that makes the check cheap, and the same one git makes.
+	write("package a\n\nfunc Two() {}\n", past)
+	if changed, err := EnsureFresh(dir, s); err != nil || changed {
+		t.Fatalf("stat-identical file: changed=%v err=%v, want unchanged", changed, err)
+	}
+
+	// Same size, new mtime: must be re-hashed and picked up.
+	write("package a\n\nfunc Two() {}\n", past.Add(time.Minute))
+	if changed, err := EnsureFresh(dir, s); err != nil || !changed {
+		t.Fatalf("same-size edit: changed=%v err=%v, want changed", changed, err)
+	}
+	if got := names(s); !got["Two"] || got["One"] {
+		t.Errorf("after same-size edit, nodes = %v", got)
+	}
+
+	// Same content, new mtime: not a change, and the record is refreshed.
+	newer := past.Add(2 * time.Minute)
+	write("package a\n\nfunc Two() {}\n", newer)
+	if changed, err := EnsureFresh(dir, s); err != nil || changed {
+		t.Fatalf("touched file: changed=%v err=%v, want unchanged", changed, err)
+	}
+	recs, err := s.FileRecords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recs["a.go"].ModTimeNs != newer.UnixNano() {
+		t.Errorf("record mtime not refreshed: got %d, want %d", recs["a.go"].ModTimeNs, newer.UnixNano())
+	}
+}
+
+// A file written in the same second it was indexed cannot be trusted by stat
+// alone, because another edit in that second may leave its mtime unchanged.
+func TestStatUnchangedDistrustsRecentWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "a.go")
+	if err := os.WriteFile(path, []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := store.FileRecord{ContentHash: "h", Size: info.Size(), ModTimeNs: info.ModTime().UnixNano()}
+
+	rec.IndexedAt = info.ModTime()
+	if statUnchanged(rec, info) {
+		t.Error("file indexed in the second it was written must be re-hashed")
+	}
+	rec.IndexedAt = info.ModTime().Add(2 * time.Second)
+	if !statUnchanged(rec, info) {
+		t.Error("file indexed well after its last write should be trusted")
 	}
 }
