@@ -73,7 +73,10 @@ func reset() {
 
 // families maps a language to the family it resolves names within, for
 // languages that routinely call each other. Anything absent is its own family.
-var families = map[string]string{}
+var families = map[string]string{
+	// C++ calls C freely, and a .h file may belong to either.
+	"cpp": "c",
+}
 
 // Family returns the group of languages whose declarations may refer to one
 // another. References are never resolved across families.
