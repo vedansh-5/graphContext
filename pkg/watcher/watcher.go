@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -22,7 +23,21 @@ type Watcher struct {
 	watchedDirs map[string]bool
 	closed      sync.Once
 	mu          sync.RWMutex
+	// seq counts filesystem events seen outside ignored directories.
+	seq atomic.Uint64
+	// degraded is set once the watcher may have missed a change.
+	degraded atomic.Bool
 }
+
+// Seq returns a counter that moves every time something changes on disk under
+// the repo, outside ignored directories. A reader that remembers the value it
+// last synced at can tell, without touching the disk, whether it is stale.
+func (w *Watcher) Seq() uint64 { return w.seq.Load() }
+
+// Healthy reports whether Seq can be trusted. It turns false for good if a
+// directory could not be watched or the OS reported an error such as a dropped
+// event, because a change may then have gone unseen.
+func (w *Watcher) Healthy() bool { return !w.degraded.Load() }
 
 func New(cfg Config) (*Watcher, error) {
 	if cfg.RepoRoot == "" {
@@ -92,6 +107,8 @@ func (w *Watcher) watchTree(root string) error {
 			if !w.watchedDirs[path] {
 				if addErr := w.fsWatcher.Add(path); addErr == nil {
 					w.watchedDirs[path] = true
+				} else {
+					w.degraded.Store(true)
 				}
 			}
 			w.mu.Unlock()
@@ -117,6 +134,7 @@ func (w *Watcher) eventLoop(ctx context.Context) {
 			if !ok {
 				return
 			}
+			w.degraded.Store(true)
 			select {
 			case w.errors <- err:
 			case <-w.done:
@@ -136,6 +154,13 @@ func (w *Watcher) eventLoop(ctx context.Context) {
 func (w *Watcher) processFSEvent(event fsnotify.Event) {
 	if event.Name == "" {
 		return
+	}
+
+	// Count every event outside ignored directories, not just accepted code
+	// files: a created or removed directory can carry source files that never
+	// produce an event of their own. Over-counting only costs a cheap re-check.
+	if !w.inIgnoredDir(event.Name) {
+		w.seq.Add(1)
 	}
 
 	stat, statErr := os.Stat(event.Name)
@@ -176,6 +201,19 @@ func (w *Watcher) processFSEvent(event fsnotify.Event) {
 		RelPath: relPath,
 		Op:      op,
 	})
+}
+
+func (w *Watcher) inIgnoredDir(path string) bool {
+	relPath, err := filepath.Rel(w.cfg.RepoRoot, path)
+	if err != nil {
+		return false
+	}
+	for _, seg := range strings.Split(filepath.ToSlash(relPath), "/") {
+		if shouldIgnoreDir(seg, w.cfg.IgnoredDirs) {
+			return true
+		}
+	}
+	return false
 }
 
 func determineOp(event fsnotify.Event, exists bool) ChangeOp {

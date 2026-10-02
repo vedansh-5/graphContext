@@ -212,3 +212,65 @@ func TestDaemonManualSyncNow(t *testing.T) {
 		t.Errorf("expected second SyncNow without file changes to report changed=false")
 	}
 }
+
+// FreshGraph must reflect an edit before the debounced background sync runs,
+// and must not re-check the disk when nothing has changed.
+func TestFreshGraphReadsYourWrites(t *testing.T) {
+	repoDir := createTestRepo(t)
+	defer os.RemoveAll(repoDir)
+
+	// Keep the database outside the repo so its writes are not seen as changes.
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("failed to open store: %v", err)
+	}
+	defer st.Close()
+
+	// A debounce this long means the background sync never fires in the test.
+	d, err := New(Config{RepoRoot: repoDir, Store: st, DebounceDuration: time.Hour})
+	if err != nil {
+		t.Fatalf("New daemon failed: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer d.Stop()
+
+	g, err := d.FreshGraph()
+	if err != nil {
+		t.Fatalf("FreshGraph: %v", err)
+	}
+	before := g.NodeCount()
+
+	syncs := d.Status().SyncCount
+	for i := 0; i < 5; i++ {
+		if _, err := d.FreshGraph(); err != nil {
+			t.Fatalf("FreshGraph: %v", err)
+		}
+	}
+	if got := d.Status().SyncCount; got != syncs {
+		t.Errorf("FreshGraph synced %d times with nothing changed, want 0", got-syncs)
+	}
+
+	extra := "package main\n\nfunc Extra() {\n\tHelper()\n}\n"
+	if err := os.WriteFile(filepath.Join(repoDir, "extra.go"), []byte(extra), 0644); err != nil {
+		t.Fatalf("failed to write extra.go: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		g, err := d.FreshGraph()
+		if err != nil {
+			t.Fatalf("FreshGraph: %v", err)
+		}
+		if g.NodeCount() > before {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("new file never appeared: still %d nodes", g.NodeCount())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

@@ -3,12 +3,14 @@ package mcp_server
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 	"sync"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/vedansh-5/graphcontext/pkg/analysis"
+	"github.com/vedansh-5/graphcontext/pkg/daemon"
 	"github.com/vedansh-5/graphcontext/pkg/indexer"
 	_ "github.com/vedansh-5/graphcontext/pkg/lang/golang"
 	_ "github.com/vedansh-5/graphcontext/pkg/lang/python"
@@ -21,6 +23,10 @@ type session struct {
 	graph    *analysis.Graph
 	repoRoot string
 	mu       sync.RWMutex
+	// live keeps the graph current from file-change events. It is nil when
+	// the watcher could not start, and the session then re-checks the disk on
+	// every call.
+	live *daemon.Daemon
 }
 
 var (
@@ -53,11 +59,21 @@ func getSession(projectPath string) (*session, error) {
 			store:    st,
 			repoRoot: absPath,
 		}
+		sess.live = startLive(absPath, st)
 		sessions[absPath] = sess
 	}
 
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+
+	if sess.live != nil {
+		g, err := sess.live.FreshGraph()
+		if err != nil {
+			return nil, fmt.Errorf("refresh live graph: %w", err)
+		}
+		sess.graph = g
+		return sess, nil
+	}
 
 	changed, err := indexer.EnsureFresh(absPath, sess.store)
 	if err != nil {
@@ -73,6 +89,23 @@ func getSession(projectPath string) (*session, error) {
 	}
 
 	return sess, nil
+}
+
+// startLive starts a watching daemon over the session's store. It returns nil
+// if that fails, which is not fatal: the session falls back to re-checking the
+// disk on every call.
+func startLive(repoRoot string, st *store.Store) *daemon.Daemon {
+	d, err := daemon.New(daemon.Config{RepoRoot: repoRoot, Store: st})
+	if err != nil {
+		log.Printf("live graph disabled for %s: %v", repoRoot, err)
+		return nil
+	}
+	if err := d.Start(context.Background()); err != nil {
+		log.Printf("live graph disabled for %s: %v", repoRoot, err)
+		_ = d.Stop()
+		return nil
+	}
+	return d
 }
 
 type toolHandler func(sess *session, projectPath string, args map[string]any) (*mcp.CallToolResult, error)
