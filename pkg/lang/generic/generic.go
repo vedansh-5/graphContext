@@ -36,6 +36,14 @@ type Call struct {
 	Callee string
 }
 
+// Scope describes a block that adds methods to a type declared elsewhere.
+type Scope struct {
+	// Type is the field naming the type the methods belong to.
+	Type string
+	// Trait is the field naming an interface the block implements, if any.
+	Trait string
+}
+
 // Decl gives the context a Spec's hooks need to classify a declaration.
 type Decl struct {
 	Path string
@@ -55,8 +63,8 @@ type Spec struct {
 	// Types maps a node type that declares a type to the kind of node created.
 	Types map[string]store.NodeKind
 	// Scopes maps a node type that holds methods for a type without declaring
-	// it (a Rust impl block) to the field naming that type.
-	Scopes map[string]string
+	// it (a Rust impl block) to where that type is named.
+	Scopes map[string]Scope
 	// Functions maps a node type that declares a function or method to a fixed
 	// name, or "" to read the name from the node. Constructors use a fixed
 	// name so that "new Foo()" resolves to the type, not to its constructor.
@@ -128,7 +136,11 @@ func (p Plugin) Parse(path string, src []byte) (*lang.FileIR, error) {
 		if fixed, ok := p.spec.Functions[n.Type()]; ok {
 			p.funcDecl(n, fixed, src, path, ir, seen)
 		}
+		if scope, ok := p.spec.Scopes[n.Type()]; ok && scope.Trait != "" {
+			p.implDecl(n, scope, src, path, ir)
+		}
 	})
+	dropOrphanRefs(ir)
 	p.calls(tree.RootNode(), src, ir)
 
 	lang.SortIR(ir)
@@ -156,6 +168,35 @@ func (p Plugin) typeDecl(n *sitter.Node, kind store.NodeKind, src []byte, path s
 		ir.Refs = append(ir.Refs, lang.Ref{
 			Kind: store.EdgeInherits, Name: base, FromID: nd.ID, Line: lang.Line(n)})
 	}
+}
+
+// dropOrphanRefs removes refs whose source is not a node in this file. An impl
+// block for a type declared in another file has nothing here to hang an edge
+// on; its trait is still recorded in the type facts.
+func dropOrphanRefs(ir *lang.FileIR) {
+	ids := make(map[string]bool, len(ir.Nodes))
+	for _, n := range ir.Nodes {
+		ids[n.ID] = true
+	}
+	kept := ir.Refs[:0]
+	for _, r := range ir.Refs {
+		if ids[r.FromID] {
+			kept = append(kept, r)
+		}
+	}
+	ir.Refs = kept
+}
+
+// implDecl records that a type implements a trait: "impl Trait for Type".
+func (p Plugin) implDecl(n *sitter.Node, scope Scope, src []byte, path string, ir *lang.FileIR) {
+	typ := typeName(lang.Text(n.ChildByFieldName(scope.Type), src))
+	trait := typeName(lang.Text(n.ChildByFieldName(scope.Trait), src))
+	if typ == "" || trait == "" {
+		return
+	}
+	ir.Types.Bases[typ] = lang.InsertSorted(ir.Types.Bases[typ], trait)
+	ir.Refs = append(ir.Refs, lang.Ref{
+		Kind: store.EdgeImplements, Name: trait, FromID: path + ":" + typ, Line: lang.Line(n)})
 }
 
 func (p Plugin) funcDecl(n *sitter.Node, fixed string, src []byte, path string, ir *lang.FileIR, seen map[string]int) {
@@ -204,8 +245,8 @@ func (p Plugin) visibility(d Decl) store.Visibility {
 // enclosingType returns the name of the nearest type a node is declared in.
 func (p Plugin) enclosingType(n *sitter.Node, src []byte) string {
 	for cur := n.Parent(); cur != nil; cur = cur.Parent() {
-		if field, ok := p.spec.Scopes[cur.Type()]; ok {
-			if name := typeName(lang.Text(cur.ChildByFieldName(field), src)); name != "" {
+		if scope, ok := p.spec.Scopes[cur.Type()]; ok {
+			if name := typeName(lang.Text(cur.ChildByFieldName(scope.Type), src)); name != "" {
 				return name
 			}
 		}
@@ -320,6 +361,10 @@ func cleanReceiver(recv string) string {
 	if strings.ContainsAny(recv, "(\n") {
 		return opaqueReceiver
 	}
+	// A path such as "super::Cart" names the type by its last segment.
+	if i := strings.LastIndex(recv, "::"); i >= 0 {
+		recv = recv[i+2:]
+	}
 	return recv
 }
 
@@ -414,13 +459,32 @@ func uniqueID(id string, seen map[string]int) string {
 	return id
 }
 
-// modifiers returns the text of a declaration's modifier list, where
-// annotations and keywords such as "public" and "static" live.
-func modifiers(d Decl) string {
-	for i := 0; i < int(d.Node.NamedChildCount()); i++ {
-		if c := d.Node.NamedChild(i); strings.Contains(c.Type(), "modifier") {
-			return lang.Text(c, d.Src)
+// modifiers returns the text of a declaration's modifiers, where annotations
+// and keywords such as "public" and "static" live.
+func modifiers(d Decl) string { return childText(d, "modifier") }
+
+// childText joins the text of every direct child whose node type contains
+// the given substring.
+func childText(d Decl, typeSubstr string) string {
+	var parts []string
+	for i := 0; i < int(d.Node.ChildCount()); i++ {
+		if c := d.Node.Child(i); strings.Contains(c.Type(), typeSubstr) {
+			parts = append(parts, lang.Text(c, d.Src))
 		}
 	}
-	return ""
+	return strings.Join(parts, " ")
+}
+
+// precedingText joins the text of the siblings directly before a declaration
+// whose node type contains the given substring. Rust attributes such as
+// #[test] are siblings of the function they annotate, not children.
+func precedingText(d Decl, typeSubstr string) string {
+	var parts []string
+	for sib := d.Node.PrevNamedSibling(); sib != nil; sib = sib.PrevNamedSibling() {
+		if !strings.Contains(sib.Type(), typeSubstr) {
+			break
+		}
+		parts = append(parts, lang.Text(sib, d.Src))
+	}
+	return strings.Join(parts, " ")
 }
