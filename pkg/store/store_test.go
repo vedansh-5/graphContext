@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -31,8 +32,8 @@ func TestOpenAppliesSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Meta: %v", err)
 	}
-	if v != "3" {
-		t.Errorf("schema_version = %q, want 3", v)
+	if want := fmt.Sprint(SchemaVersion); v != want {
+		t.Errorf("schema_version = %q, want %s", v, want)
 	}
 }
 
@@ -100,8 +101,8 @@ func TestSchemaVersionMismatchRebuilds(t *testing.T) {
 	if m, _ := s2.Meta("marker"); m != "" {
 		t.Errorf("stale-schema db should be rebuilt empty, marker = %q", m)
 	}
-	if v, _ := s2.Meta("schema_version"); v != "3" {
-		t.Errorf("schema_version = %q, want 3", v)
+	if v, _ := s2.Meta("schema_version"); v != fmt.Sprint(SchemaVersion) {
+		t.Errorf("schema_version = %q, want %d", v, SchemaVersion)
 	}
 }
 
@@ -356,5 +357,43 @@ func TestSearchDropsPurgedNodes(t *testing.T) {
 	}
 	if len(hits) != 0 {
 		t.Errorf("purged node still searchable: %+v", hits)
+	}
+}
+
+func TestSearchReindexReplacesTokens(t *testing.T) {
+	s := newTestStore(t)
+
+	// Index the same file twice, renaming its only function in between. An
+	// external node sits in the same batch so node and FTS rowids diverge
+	// unless the FTS row is keyed to its node.
+	for _, name := range []string{"findWidget", "loadGadget"} {
+		b := NewBatch()
+		b.TouchFile(FileRecord{Path: "a.go", ContentHash: name, IndexedAt: time.Now()})
+		b.AddNode(Node{ID: "external:fmt", Kind: KindExternal, Name: "fmt", QualifiedName: "fmt"})
+		b.AddNode(fn("a.go:"+name, name, "a."+name, "a.go"))
+		if err := s.Commit(b); err != nil {
+			t.Fatalf("commit %s: %v", name, err)
+		}
+	}
+
+	if hits, err := s.Search("find widget", 10); err != nil || len(hits) != 0 {
+		t.Errorf("old name still searchable: hits=%+v err=%v", hits, err)
+	}
+	hits, err := s.Search("load gadget", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("want exactly 1 hit for the new name, got %+v", hits)
+	}
+
+	// Re-committing an unchanged node must not duplicate its FTS row.
+	b := NewBatch()
+	b.AddNode(fn("a.go:loadGadget", "loadGadget", "a.loadGadget", "a.go"))
+	if err := s.Commit(b); err != nil {
+		t.Fatalf("recommit: %v", err)
+	}
+	if hits, _ := s.Search("load gadget", 10); len(hits) != 1 {
+		t.Errorf("want 1 hit after recommit, got %+v", hits)
 	}
 }
