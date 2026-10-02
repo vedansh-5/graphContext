@@ -146,17 +146,26 @@
   - Non-blocking sync event subscription pipeline for downstream clients.
   - Comprehensive unit and integration test suite in `pkg/daemon/daemon_test.go`.
 
-#### M3.3 — Idle Session Eviction & Resource Lifecycle (Up Next)
-- Package: `pkg/daemon`
+#### M3.3 — Idle Session Eviction & Resource Lifecycle
+- Branch: `feat/m3-session-eviction`
+- Package: `pkg/mcp_server`
 - Deliverables:
-  - LRU / TTL session reaper evicting dormant repository graphs and idle SQLite connections to keep memory bounded.
-  - Graceful shutdown handlers trapping `SIGINT`/`SIGTERM` to flush pending writes cleanly.
+  - Idle reaper closing a project's watcher, graph and SQLite handle after `GRAPHCONTEXT_IDLE_TTL` (default 30m); sessions with a tool call in flight are never evicted.
+  - All sessions are closed when the stdio server stops on `SIGINT`/`SIGTERM` or stdin close.
 
 #### M3.4 — CLI Watch Mode & MCP Live Server Integration
-- Package: `cmd/graphcontext` & `pkg/mcp_server`
+- PR: [#20](https://github.com/vedansh-5/graphContext/pull/20) (MCP half)
+- Package: `pkg/mcp_server`, `pkg/daemon`, `pkg/watcher`
 - Deliverables:
-  - `graphcontext watch <path>` CLI subcommand for standalone daemon execution.
-  - Wire MCP `session.go` to query the live in-memory daemon graph for sub-millisecond query responses without cold indexing.
+  - MCP sessions served from the live daemon graph via `Daemon.FreshGraph`, with a watcher sequence number as the read-your-writes barrier.
+  - Up next: `graphcontext watch <path>` CLI subcommand for standalone daemon execution.
+
+#### Indexing performance
+- PRs: [#14](https://github.com/vedansh-5/graphContext/pull/14), [#16](https://github.com/vedansh-5/graphContext/pull/16), [#17](https://github.com/vedansh-5/graphContext/pull/17), [#18](https://github.com/vedansh-5/graphContext/pull/18), [#19](https://github.com/vedansh-5/graphContext/pull/19)
+- Deliverables:
+  - FTS rows keyed to node rowids, delta writes, stat-based skip of unchanged files, cached per-file parse results.
+  - Re-index after one edit on a 2000-file synthetic repo: 4.8s to 0.06s. Benchmarks in `pkg/indexer/bench_test.go`.
+  - Crawler takes its extensions from the language registry and shares one ignore list with the watcher.
 
 ---
 
