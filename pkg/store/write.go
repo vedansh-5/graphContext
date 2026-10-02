@@ -92,17 +92,19 @@ func (s *Store) Commit(b *Batch) error {
 	}
 
 	fileStmt, err := tx.Prepare(
-		`INSERT INTO files(path, content_hash, indexed_at) VALUES(?, ?, ?)
+		`INSERT INTO files(path, content_hash, indexed_at, size, mtime_ns) VALUES(?, ?, ?, ?, ?)
 		 ON CONFLICT(path) DO UPDATE SET
 		   content_hash = excluded.content_hash,
-		   indexed_at   = excluded.indexed_at`)
+		   indexed_at   = excluded.indexed_at,
+		   size         = excluded.size,
+		   mtime_ns     = excluded.mtime_ns`)
 	if err != nil {
 		return fmt.Errorf("prepare file insert: %w", err)
 	}
 	defer fileStmt.Close()
 	for _, files := range [][]FileRecord{b.touched, b.recorded} {
 		for _, f := range files {
-			if _, err := fileStmt.Exec(f.Path, f.ContentHash, f.IndexedAt.Unix()); err != nil {
+			if _, err := fileStmt.Exec(f.Path, f.ContentHash, f.IndexedAt.Unix(), f.Size, f.ModTimeNs); err != nil {
 				return fmt.Errorf("insert file %s: %w", f.Path, err)
 			}
 		}

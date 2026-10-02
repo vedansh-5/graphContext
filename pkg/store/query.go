@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"time"
 )
 
 const nodeCols = `id, kind, name, qualified_name, file_path,
@@ -70,6 +71,28 @@ func (s *Store) FileHashes() (map[string]string, error) {
 			return nil, fmt.Errorf("scan file hash: %w", err)
 		}
 		out[p] = h
+	}
+	return out, rows.Err()
+}
+
+// FileRecords returns the full record for every indexed file, keyed by path.
+func (s *Store) FileRecords() (map[string]FileRecord, error) {
+	rows, err := s.conn.Query(
+		`SELECT path, content_hash, indexed_at, size, mtime_ns FROM files ORDER BY path`)
+	if err != nil {
+		return nil, fmt.Errorf("read file records: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]FileRecord{}
+	for rows.Next() {
+		var f FileRecord
+		var indexedAt int64
+		if err := rows.Scan(&f.Path, &f.ContentHash, &indexedAt, &f.Size, &f.ModTimeNs); err != nil {
+			return nil, fmt.Errorf("scan file record: %w", err)
+		}
+		f.IndexedAt = time.Unix(indexedAt, 0).UTC()
+		out[f.Path] = f
 	}
 	return out, rows.Err()
 }
