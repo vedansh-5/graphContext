@@ -316,3 +316,86 @@ func TestStatUnchangedDistrustsRecentWrites(t *testing.T) {
 		t.Error("file indexed well after its last write should be trusted")
 	}
 }
+
+func TestEnsureFreshCachesParsedFiles(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.go")
+	b := filepath.Join(dir, "b.go")
+	if err := os.WriteFile(a, []byte("package p\n\nfunc A() { B() }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(b, []byte("package p\n\nfunc B() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := benchStore(t)
+	if _, err := EnsureFresh(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	irs, err := s.FileIRs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(irs) != 2 {
+		t.Fatalf("want 2 cached parses, got %d", len(irs))
+	}
+	ir, err := decodeIR(irs["a.go"].Data)
+	if err != nil {
+		t.Fatalf("decodeIR: %v", err)
+	}
+	if ir.Path != "a.go" || len(ir.Nodes) == 0 || len(ir.Refs) == 0 {
+		t.Errorf("cached parse lost data: %+v", ir)
+	}
+	beforeB := irs["b.go"]
+
+	// Editing a.go re-parses only a.go; deleting b.go drops its cached parse.
+	if err := os.WriteFile(a, []byte("package p\n\nfunc A() {}\n\nfunc A2() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureFresh(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	irs, _ = s.FileIRs()
+	if irs["a.go"].ContentHash == "" || irs["a.go"].ContentHash == beforeB.ContentHash {
+		t.Errorf("a.go cache not refreshed: %+v", irs["a.go"].ContentHash)
+	}
+	if !reflect.DeepEqual(irs["b.go"], beforeB) {
+		t.Error("b.go was unchanged, its cached parse should be untouched")
+	}
+
+	if err := os.Remove(b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureFresh(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	irs, _ = s.FileIRs()
+	if _, ok := irs["b.go"]; ok || len(irs) != 1 {
+		t.Errorf("cached parse of deleted file not removed: %d left", len(irs))
+	}
+}
+
+// A graph built by an older IR version is rebuilt even when no file changed.
+func TestEnsureFreshRebuildsOnIRVersionChange(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package p\n\nfunc A() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := benchStore(t)
+	if _, err := EnsureFresh(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	if changed, _ := EnsureFresh(dir, s); changed {
+		t.Fatal("second run should be a no-op")
+	}
+
+	if err := s.SetMeta(irVersionKey, "older"); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := EnsureFresh(dir, s); err != nil || !changed {
+		t.Fatalf("stale IR version: changed=%v err=%v, want changed", changed, err)
+	}
+	if changed, _ := EnsureFresh(dir, s); changed {
+		t.Error("run after rebuild should be a no-op")
+	}
+}

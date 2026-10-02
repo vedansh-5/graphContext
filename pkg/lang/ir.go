@@ -8,6 +8,11 @@ package lang
 
 import "github.com/vedansh-5/graphcontext/pkg/store"
 
+// IRVersion identifies the shape and meaning of FileIR. Bump it whenever a
+// plugin starts extracting something different from the same source, so cached
+// parse results from the older version are thrown away.
+const IRVersion = 1
+
 // FileIR is everything pass 1 extracts from a single file.
 type FileIR struct {
 	Path     string

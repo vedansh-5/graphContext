@@ -20,6 +20,7 @@ type Batch struct {
 	recorded     []FileRecord
 	deletedNodes []string
 	deletedEdges []Edge
+	irs          []FileIR
 }
 
 // NewBatch returns an empty batch.
@@ -48,6 +49,9 @@ func (b *Batch) DeleteNode(id string) { b.deletedNodes = append(b.deletedNodes, 
 
 // DeleteEdge queues the removal of one edge, identified by its primary key.
 func (b *Batch) DeleteEdge(e Edge) { b.deletedEdges = append(b.deletedEdges, e) }
+
+// PutIR queues a file's cached parse result, replacing any earlier one.
+func (b *Batch) PutIR(ir FileIR) { b.irs = append(b.irs, ir) }
 
 // Len reports how many nodes and edges are queued.
 func (b *Batch) Len() (nodes, edges int) { return len(b.nodes), len(b.edges) }
@@ -82,6 +86,9 @@ func (s *Store) Commit(b *Batch) error {
 		if _, err := tx.Exec(`DELETE FROM files WHERE path = ?`, p); err != nil {
 			return fmt.Errorf("delete file record %s: %w", p, err)
 		}
+		if _, err := tx.Exec(`DELETE FROM file_irs WHERE path = ?`, p); err != nil {
+			return fmt.Errorf("delete cached parse of %s: %w", p, err)
+		}
 	}
 
 	if err := insertNodes(tx, b.nodes); err != nil {
@@ -110,6 +117,10 @@ func (s *Store) Commit(b *Batch) error {
 		}
 	}
 
+	if err := putIRs(tx, b.irs); err != nil {
+		return err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
@@ -130,6 +141,28 @@ func purgeFile(tx *sql.Tx, path string) error {
 	}
 	if _, err := tx.Exec(`DELETE FROM nodes WHERE file_path = ?`, path); err != nil {
 		return fmt.Errorf("purge nodes for %s: %w", path, err)
+	}
+	return nil
+}
+
+func putIRs(tx *sql.Tx, irs []FileIR) error {
+	if len(irs) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(
+		`INSERT INTO file_irs(path, content_hash, data) VALUES(?, ?, ?)
+		 ON CONFLICT(path) DO UPDATE SET
+		   content_hash = excluded.content_hash,
+		   data         = excluded.data`)
+	if err != nil {
+		return fmt.Errorf("prepare cached parse insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, ir := range irs {
+		if _, err := stmt.Exec(ir.Path, ir.ContentHash, ir.Data); err != nil {
+			return fmt.Errorf("cache parse of %s: %w", ir.Path, err)
+		}
 	}
 	return nil
 }
